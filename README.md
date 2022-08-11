@@ -22,3 +22,6 @@ Infrastructure:
 Self-host:
 - Install S3 locally, run worker everywhere.
 - Optionally: Run own instance of madiler, otherwise use public one.
+
+Stack:
+- MongoDB, FastAPI, Metabase, MinIO
