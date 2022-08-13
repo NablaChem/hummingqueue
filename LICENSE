@@ -5,9 +5,9 @@ embedded into other projects without requiring disclosure of the code of the oth
 projects provided that all three conditions are fulfilled:
 a) the endpoints / command line interfaces are used without any modification except
    for the name of the command line tool
-b) no additional features are offered or interact with this project in any way. Other
-   unrelated features are permissible.
-c) the current project is linked to in the API documentation / help text of the CLI
+b) no additional features interact with this project in any way. Other
+   unrelated features in the same API or CLI are permissible.
+c) the current project is references via a hyperlink in the API documentation / help text of the CLI
    at all places that mention either an API endpoint or document an CLI command.
 
 
