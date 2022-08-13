@@ -25,3 +25,6 @@ Self-host:
 
 Stack:
 - MongoDB, FastAPI, Metabase, MinIO
+
+Name:
+- migratory bird that does not migrate if local resources are good enough
