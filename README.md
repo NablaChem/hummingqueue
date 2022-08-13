@@ -1,4 +1,4 @@
-*madiler* helps running millions of calculations at scale. Coming from the HPC world, it aims at a scalable subset of SLURM. While common schedulers such as airflow or Luigi emphasize workflows, *madiler* emphasizes scale.
+*hummingqueue* helps running millions of calculations at scale. Coming from the HPC world, it aims at a scalable subset of SLURM. While common schedulers such as airflow or Luigi emphasize workflows, *madiler* emphasizes scale.
 
 Core features:
 - [ ] Submit millions of jobs easily.
