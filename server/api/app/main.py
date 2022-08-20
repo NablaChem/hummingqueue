@@ -29,9 +29,7 @@ class JobFetch(NodeAuth):
 
 
 class JobSpec(BaseModel):
-    container: str = Field(
-        ..., description="Name and version of container to run the command in."
-    )
+    container: str = Field(..., description="URL of the container to run.")
     command: str = Field(..., description="Command to run.")
     datasource: str = Field(
         ..., description="URL, e.g. to S3 directory containing the data to be present."
