@@ -1,0 +1,7 @@
+version: "3.3"
+
+services:
+  api:
+    volumes:
+      - "./api/app/:/code/app/"
+

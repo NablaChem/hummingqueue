@@ -28,6 +28,6 @@ services:
       - "80"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`api.localhost`)"
+      - "traefik.http.routers.whoami.rule=Host(`api.lvh.me`)"
       - "traefik.http.routers.whoami.entrypoints=web"
 
