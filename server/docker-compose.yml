@@ -17,6 +17,8 @@ services:
   mongo:
     image: "mongo:5.0"
     restart: "unless-stopped"
+    ports:
+     - "27017:27017"
     volumes:
      - "dev-mongodb:/data/db"
     environment:
@@ -53,8 +55,8 @@ services:
       - "80"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.whoami.rule=Host(`api.lvh.me`)"
-      - "traefik.http.routers.whoami.entrypoints=web"
+      - "traefik.http.routers.api.rule=Host(`api.lvh.me`)"
+      - "traefik.http.routers.api.entrypoints=web"
 
 volumes:
   dev-minio:
