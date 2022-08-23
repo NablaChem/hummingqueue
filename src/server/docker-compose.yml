@@ -28,24 +28,25 @@ services:
   minio:
     image: "minio/minio:RELEASE.2022-01-08T03-11-54Z"
     restart: "unless-stopped"
-    command:
-      - "server"
-      - "/data"
-      - "--console-address"
-      - ":9001"
+    command: "server /data --console-address :9001 --address :9000"
+    expose:
+      - 9000
+      - 9001
     volumes:
       - "dev-minio:/data"
     environment:
       - "MINIO_ROOT_USER=${MINIO_ROOT_USER}"
       - "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASS}"
-      - "MINIO_DOMAIN=s3front.lvh.me"
+      - "MINIO_BROWSER_REDIRECT_URL=http://s3console.lvh.me"
+      - "MINIO_DOMAIN=http://s3.lvh.me"
     labels:
       - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
       - "traefik.http.routers.minio.service=minio"
       - "traefik.http.routers.minio.rule=Host(`s3.lvh.me`)"
       - "traefik.http.services.minio.loadbalancer.server.port=9000"
       - "traefik.http.routers.minio-console.service=minio-console"
-      - "traefik.http.routers.minio-console.rule=Host(`s3front.lvh.me`)"
+      - "traefik.http.routers.minio-console.rule=Host(`s3console.lvh.me`)"
       - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
 
   api:
