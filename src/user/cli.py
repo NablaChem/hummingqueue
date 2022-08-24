@@ -13,10 +13,6 @@ def group_job_submit():
     pass
 
 
-HUMMING_QUEUE = "user-311e6015-b0fb-4ad0-a5b6-54ba1addec37@api.lvh.me/project-0415bf24-f25b-43e3-8404-75d92e7410e7"
-HUMMING_QUEUE_S3 = "username@s3.lvh.me/bucketname"
-
-
 @group_job_submit.command()
 @click.option("--memory", default=4000, help="Memory limit in MB.")
 @click.option("--time", default=60 * 24, help="Time limit in minutes.")

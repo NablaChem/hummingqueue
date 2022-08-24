@@ -1,6 +1,4 @@
 import aiohttp
-from matplotlib.collections import Collection
-from . import internal
 import os
 import io
 import tarfile
@@ -14,13 +12,22 @@ import aiobotocore.session
 import multiprocessing as mp
 import time
 import collections
+import minio
 
 Connection = collections.namedtuple(
-    "Connection", "userid apiurl project s3accesskey s3secretkey s3url s3bucket"
+    "Connection",
+    "user_token api_url project_token s3_access_key s3_secret_key s3_url s3_bucket",
 )
 
 
-def get_connection():
+def get_connection() -> Connection:
+    """Extracts connection details from the machine settings
+
+    Returns
+    -------
+    Connection
+        Named tuple with connection details.
+    """
     connectionstring = os.getenv("HUMMING_QUEUE")
     if connectionstring is None:
         print(
@@ -53,6 +60,17 @@ def get_connection():
     return Connection(
         userid, apiurl, project, s3accesskey, s3secretkey, s3url, s3bucket
     )
+
+
+def get_s3_client(conn: Connection) -> minio.Minio:
+    """Builds a S3 client object from connection information."""
+    s3_client = minio.Minio(
+        conn.s3url,
+        access_key=conn.s3accesskey,
+        secret_key=conn.s3secretkey,
+        secure=conn.s3url.startswith("https"),
+    )
+    return s3_client
 
 
 async def _async_object_stage(
@@ -276,79 +294,79 @@ def job_submit(
     cores: int = 1,
     memorymb: int = 4000,
     timeseconds: int = 24 * 60 * 60,
+    tags: List[str] = [],
 ):
     """Submits a given directory content as job to the queue."""
+    conn = get_connection()
     try:
         payload = _job_submit_payload(
-            directory, container, command, cores, memorymb, timeseconds
+            directory, container, command, cores, memorymb, timeseconds, tags
         )
     except ValueError as e:
         print(f"Failed: {str(e)}")
         return
 
-    res = rq.post(f"{internal.BASEURL}/v22_1/job-submit", json=payload)
+    res = rq.post(f"{conn.apiurl}/v22_1/job/create", json=payload)
     if res.status_code != 200:
-        print("Cannot submit jobs. Please check the input.")
+        print("Cannot submit job. Please check the input.")
         return
     jobid = res.json()
 
-    _job_submit_finalize(directory, jobid, payload["bucketid"])
+    _job_submit_finalize(directory, jobid, payload["datasource"])
 
 
 def _job_submit_payload(
     directory: str,
-    code: str,
-    version: str,
+    container: str,
     command: str,
     cores: int,
     memorymb: int,
     timeseconds: int,
+    tags: List[str],
 ):
-    api_secret = internal.get_api_secret()
-    if api_secret is None:
-        return
-    s3_client = internal.get_s3_client()
-    if s3_client is None:
-        return
+    conn = get_connection()
+    s3_client = get_s3_client(conn)
 
-    if os.path.exists(f"{directory}/leruli.job"):
+    if os.path.exists(f"{directory}/hq.job"):
         raise ValueError("Directory already submitted.")
 
-    bucket = str(uuid.uuid4())
-    s3_client.make_bucket(bucket)
+    bucketfolder = str(uuid.uuid4())
 
     # in-memory tar file
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         tar.add(directory, arcname=os.path.basename("."))
-
-        runscript = io.BytesIO(("#!/bin/bash\n" + " ".join(command)).encode("ascii"))
-        tarinfo = tarfile.TarInfo(name="run.sh")
-        tarinfo.size = runscript.getbuffer().nbytes
-        tar.addfile(tarinfo=tarinfo, fileobj=runscript)
     buffer.seek(0)
 
     # upload
-    s3_client.put_object(bucket, "run.tgz", buffer, buffer.getbuffer().nbytes)
+    s3_client.put_object(
+        f"{conn.s3bucket}/{bucketfolder}",
+        "input.tgz",
+        buffer,
+        buffer.getbuffer().nbytes,
+    )
 
     # submit to API
-    codeversion = f"{code}:{version}"
+    s3url = f"{conn.s3url}/{conn.s3bucket}/{bucketfolder}"
     payload = {
-        "secret": api_secret,
-        "bucketid": bucket,
-        "name": "default",
-        "codeversion": codeversion,
-        "cores": cores,
-        "memorymb": memorymb,
-        "timelimit": timeseconds,
+        "container": container,
+        "command": command,
+        "user_token": conn.userid,
+        "projectid": conn.projectid,
+        "data_source": s3url,
+        "data_target": s3url,
+        "core_limit": cores,
+        "memory_mb_limit": memorymb,
+        "time_seconds_limit": timeseconds,
+        "tags": tags,
     }
     return payload
 
 
 def _job_submit_finalize(directory, jobid, bucket):
     # local handle
-    with open(f"{directory}/leruli.job", "w") as fh:
+    with open(f"{directory}/hq.job", "w") as fh:
         fh.write(f"{jobid}\n")
-    with open(f"{directory}/leruli.bucket", "w") as fh:
+    with open(f"{directory}/hq.bucket", "w") as fh:
         fh.write(f"{bucket}\n")
     return jobid
