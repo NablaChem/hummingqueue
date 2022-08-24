@@ -4,7 +4,8 @@ import time
 import socket
 import random
 import psutil
-import shlex
+import rsa
+import base64
 import collections
 import requests as rq
 
@@ -16,18 +17,48 @@ class Client:
         self,
         url: str,
         ownerid: str,
-        computesecret: str,
         hostname: str,
         reserve_cores: int,
         reserve_memory_mb: int,
     ):
         self._baseurl = url
         self._ownerid = ownerid
-        self._computesecret = computesecret
         self._nodeid = hostname
         self._reserve_cores = reserve_cores
         self._reserve_memory_mb = reserve_memory_mb
         self._jobs = []
+
+        self._setup_crypto()
+
+    def _setup_crypto(self):
+        try:
+            with open("private.der", "rb") as fh:
+                binpriv = fh.read()
+            with open("public.der", "rb") as fh:
+                binpub = fh.read()
+
+            self._pubkey = rsa.PublicKey.load_pkcs1(base64.b64decode(binpub), "DER")
+            self._privkey = rsa.PrivateKey.load_pkcs1(base64.b64decode(binpriv), "DER")
+            print("Loaded private/public key pair successfully.")
+        except FileNotFoundError:
+            print("No private/public key pair found, creating one.")
+            pubkey, privkey = rsa.newkeys(2048)
+            self._pubkey = pubkey
+            self._privkey = privkey
+
+            binpub = pubkey.save_pkcs1("DER")
+            binpriv = privkey.save_pkcs1("DER")
+
+            with open("private.der", "wb") as fh:
+                fh.write(base64.b64encode(binpriv))
+
+            with open("public.der", "wb") as fh:
+                fh.write(base64.b64encode(binpub))
+
+            # TODO: register public key with API
+
+        # required to derive the computesecret
+        self.heartbeat()
 
     def _post(self, endpoint, payload):
         res = rq.post(f"{self._baseurl}/{endpoint}", json=payload)
@@ -45,12 +76,17 @@ class Client:
     def heartbeat(self):
         """Tell API node is still around."""
         try:
-            self._post(
+            challenge = self._post(
                 "heartbeat",
                 self._get_nodeauth(),
             )
         except:
             print("Cannot contact queue. Network failure? Skipping heartbeat.")
+            return
+        if challenge != self._challenge:
+            self._computesecret = base64.b64encode(
+                rsa.sign(challenge, self._privkey, "SHA-256")
+            )
 
     def _available_resources(self):
         # memory
@@ -119,7 +155,6 @@ class Client:
 @click.command()
 @click.argument("URL")
 @click.argument("ownerid")
-@click.argument("computesecret")
 @click.option(
     "--hostname",
     default=socket.getfqdn(),
@@ -135,11 +170,11 @@ class Client:
     default=0,
     help="Amount of memory in MB to reserve for other use of this node.",
 )
-def main(url, ownerid, computesecret, hostname, reserve_cores, reserve_memory_mb):
+def main(url, ownerid, hostname, reserve_cores, reserve_memory_mb):
     """Runs compute jobs on this node.
 
     The jobs are read from the queue at URL for the machine owner OWNERID authenticated by the COMPUTESECRET."""
-    c = Client(url, ownerid, computesecret, hostname, reserve_cores, reserve_memory_mb)
+    c = Client(url, ownerid, hostname, reserve_cores, reserve_memory_mb)
     c.run()
 
 
