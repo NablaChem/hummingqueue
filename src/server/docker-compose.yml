@@ -58,6 +58,8 @@ services:
       - "traefik.enable=true"
       - "traefik.http.routers.api.rule=Host(`api.lvh.me`)"
       - "traefik.http.routers.api.entrypoints=web"
+    environment:
+      - "MONGODB_CONNSTR=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo/hq"
 
 volumes:
   dev-minio:
