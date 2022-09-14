@@ -1,14 +1,24 @@
-from pydantic import BaseModel, Field, constr
+from multiprocessing.sharedctypes import Value
+from pydantic import BaseModel, Field, constr, root_validator
 from typing import List, Optional
-import pymongo
-import os
+import time
+import secrets
+
+from . import validators
+from . import helpers
+from . import auth
 
 counter = 0
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header
 
 app = FastAPI()
-db = pymongo.MongoClient(os.getenv("MONGODB_CONNSTR"))
+
+
+class AdminAuth(BaseModel):
+    admin_token: str = Field(..., description="Installation-specific admin token.")
+
+    _validator_admin = root_validator(allow_reuse=True)(validators.admin)
 
 
 class NodeAuth(BaseModel):
@@ -17,6 +27,11 @@ class NodeAuth(BaseModel):
         ..., description="System-generated identifier of the owner."
     )
     compute_token: str = Field(..., description="Authentication for node.")
+
+    _validator_owner = root_validator(allow_reuse=True)(validators.owner)
+    _validator_compute_token = root_validator(allow_reuse=True)(
+        validators.compute_token
+    )
 
 
 class UserAuth(BaseModel):
@@ -33,15 +48,15 @@ class JobFetch(NodeAuth):
 
 
 class JobSpec(UserAuth):
-    container: str = Field(..., description="Name of the container to run.")
-    command: constr = Field(..., description="Command to run.", max_length=2000)
-    data_source: str = Field(
-        ..., description="S3 directory containing the data to be present."
-    )
-    data_target: str = Field(
-        ...,
-        description="S3 directory where all modified files should be uploaded to.",
-    )
+    container_hash: str = Field(..., description="Checksum of the container to run.")
+    # command: constr = Field(..., description="Command to run.", max_length=2000)
+    # data_source: str = Field(
+    #     ..., description="S3 directory containing the data to be present."
+    # )
+    # data_target: str = Field(
+    #     ...,
+    #     description="S3 directory where all modified files should be uploaded to.",
+    # )
     core_limit: int = Field(..., description="Requested number of cores.")
     memory_mb_limit: int = Field(..., description="Requested memory in MB.")
     time_seconds_limit: int = Field(..., description="Requested wall time duration.")
@@ -51,11 +66,20 @@ class JobSpec(UserAuth):
     )
 
 
+@app.get("/challenge")
+def current_challenge():
+    return helpers.get_valid_challenges()["current"]
+
+
 @app.post("/heartbeat")
-def register_heartbeat(body: NodeAuth):
-    # TODO: write to mongodb
-    # TODO: rreturn challenge for signed communication
-    pass
+def register_heartbeat(
+    body: NodeAuth, signature: str = Header(default=None, convert_underscores=False)
+):
+    criteria = {"owner_token": body.owner_token, "node_id": body.node_id}
+    heartbeat = criteria.copy()
+    heartbeat["seen"] = time.time()
+    auth.db.heartbeats.replace_one(criteria, heartbeat)
+    return helpers.get_valid_challenges()["current"]
 
 
 @app.post("/job/fetch")
@@ -71,7 +95,40 @@ def job_create(body: JobSpec):
     pass
 
 
-@app.post("/owner/activate")
+class OwnerCreateResponse(BaseModel):
+    owner_token: str = Field(..., description="Newly created owner token.")
+
+
+@app.post(
+    "/owner/create",
+    summary="Creates a new owner.",
+    description="Only accessible to the admin of the installation.",
+    tags=["authentication"],
+    responses={
+        403: {"description": "Authentication failed."},
+        200: {"description": "Owner created.", "model": OwnerCreateResponse},
+    },
+)
+def owner_create(body: AdminAuth):
+    owner_token = secrets.token_urlsafe(auth.TOKEN_LENGTH)
+    auth.db.users.insert_one({"token": owner_token, "is_owner": True})
+    return {"owner_token": owner_token}
+
+
+class OwnerFirstTimeAuth(BaseModel):
+    owner_token: str = Field(..., description="Owner token.")
+
+
+@app.post(
+    "/owner/activate",
+    summary="Initial setup for a new owner.",
+    description="The user-supplied public key will be used for future authentication of this owner. Can only be called once for a given owner.",
+    tags=["authentication"],
+    responses={
+        404: {"description": "No such owner."},
+        403: {"description": "Cannot initialize again."},
+    },
+)
 def owner_activate():
     # TODO: initial public key load, only works once
     pass
