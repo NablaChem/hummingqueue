@@ -117,6 +117,13 @@ def owner_create(body: AdminAuth):
 
 class OwnerFirstTimeAuth(BaseModel):
     owner_token: str = Field(..., description="Owner token.")
+    public_key: str = Field(..., description="Base64-encoded DER format public key.")
+
+    _validator_owner = root_validator(allow_reuse=True)(validators.owner)
+    _validator_owner_no_key = root_validator(allow_reuse=True)(validators.owner_no_key)
+    _validator_public_key_consistent = root_validator(allow_reuse=True)(
+        validators.public_key_consistent
+    )
 
 
 @app.post(
@@ -127,8 +134,11 @@ class OwnerFirstTimeAuth(BaseModel):
     responses={
         404: {"description": "No such owner."},
         403: {"description": "Cannot initialize again."},
+        200: {"description": "Public key stored."},
     },
 )
-def owner_activate():
-    # TODO: initial public key load, only works once
-    pass
+def owner_activate(body: OwnerFirstTimeAuth):
+    auth.db.users.update_one(
+        {"owner_token": body.owner_token, "is_owner": True},
+        {"public_key": body.public_key},
+    )
