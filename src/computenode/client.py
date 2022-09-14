@@ -9,7 +9,7 @@ import base64
 import collections
 import requests as rq
 
-Job = collections.namedtuple("Job", "jobid cores memory_mb handle")
+Job = collections.namedtuple("Job", "jobid cores memory_mb process")
 
 
 class Client:
@@ -67,6 +67,11 @@ class Client:
         return res.json()
 
     def _get_nodeauth(self):
+        if self._challenge is None:
+            self._challenge = self._get("challenge")
+            self._computesecret = base64.b64encode(
+                rsa.sign(self._challenge, self._privkey, "SHA-256")
+            )
         return {
             "nodeid": self._nodeid,
             "ownerid": self._ownerid,
@@ -109,7 +114,7 @@ class Client:
     def has_capacity(self):
         # check for completed jobs
         for job in self._jobs:
-            status = job.handle.poll()
+            status = job.process.poll()
             if status is not None:
                 self._upload_results(job.jobid)
                 print(f"{job.jobid} finished with exit code {status}")
