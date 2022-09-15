@@ -10,15 +10,13 @@ from . import auth
 
 counter = 0
 
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, Request
 
 app = FastAPI()
 
 
 class AdminAuth(BaseModel):
     admin_token: str = Field(..., description="Installation-specific admin token.")
-
-    _validator_admin = root_validator(allow_reuse=True)(validators.admin)
 
 
 class NodeAuth(BaseModel):
@@ -27,11 +25,6 @@ class NodeAuth(BaseModel):
         ..., description="System-generated identifier of the owner."
     )
     compute_token: str = Field(..., description="Authentication for node.")
-
-    _validator_owner = root_validator(allow_reuse=True)(validators.owner)
-    _validator_compute_token = root_validator(allow_reuse=True)(
-        validators.compute_token
-    )
 
 
 class UserAuth(BaseModel):
@@ -72,9 +65,13 @@ def current_challenge():
 
 
 @app.post("/heartbeat")
-def register_heartbeat(
-    body: NodeAuth, signature: str = Header(default=None, convert_underscores=False)
-):
+def register_heartbeat(body: NodeAuth, request: Request):
+    # validate request
+    owner = validators.owner_exists(body)
+    validators.body_signed(request, owner)
+    validators.compute_token_valid(body, owner)
+
+    # handle request
     criteria = {"owner_token": body.owner_token, "node_id": body.node_id}
     heartbeat = criteria.copy()
     heartbeat["seen"] = time.time()
@@ -110,7 +107,11 @@ class OwnerCreateResponse(BaseModel):
     },
 )
 def owner_create(body: AdminAuth):
-    owner_token = secrets.token_urlsafe(auth.TOKEN_LENGTH)
+    # validate request
+    validators.is_admin(body)
+
+    # handle request
+    owner_token = helpers.new_token()
     auth.db.users.insert_one({"token": owner_token, "is_owner": True})
     return {"owner_token": owner_token}
 
@@ -118,12 +119,6 @@ def owner_create(body: AdminAuth):
 class OwnerFirstTimeAuth(BaseModel):
     owner_token: str = Field(..., description="Owner token.")
     public_key: str = Field(..., description="Base64-encoded DER format public key.")
-
-    _validator_owner = root_validator(allow_reuse=True)(validators.owner)
-    _validator_owner_no_key = root_validator(allow_reuse=True)(validators.owner_no_key)
-    _validator_public_key_consistent = root_validator(allow_reuse=True)(
-        validators.public_key_consistent
-    )
 
 
 @app.post(
@@ -133,11 +128,17 @@ class OwnerFirstTimeAuth(BaseModel):
     tags=["authentication"],
     responses={
         404: {"description": "No such owner."},
-        403: {"description": "Cannot initialize again."},
+        403: {"description": "Authentication error."},
         200: {"description": "Public key stored."},
     },
 )
-def owner_activate(body: OwnerFirstTimeAuth):
+def owner_activate(body: OwnerFirstTimeAuth, request: Request):
+    # validate request
+    owner = validators.owner_exists(body)
+    validators.owner_has_no_key(owner)
+    validators.public_key_consistent(body, request)
+
+    # handle request
     auth.db.users.update_one(
         {"owner_token": body.owner_token, "is_owner": True},
         {"public_key": body.public_key},

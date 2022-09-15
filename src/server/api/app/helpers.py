@@ -1,6 +1,7 @@
 import time
 import hashlib
 from . import auth
+import secrets
 
 
 def get_valid_challenges():
@@ -14,3 +15,7 @@ def get_valid_challenges():
         (auth.salt + str(unixhour - 1)).encode("utf8")
     ).hexdigest()
     return challenges
+
+
+def new_token():
+    return secrets.token_urlsafe(auth.TOKEN_LENGTH)
