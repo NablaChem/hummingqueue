@@ -6,7 +6,9 @@ jobs:
                 steps:
                         - uses: actions/checkout@v2
                         - name: Build the stack
-                          run: docker-compose up -d
+                          run: |
+                                  cd src/server/
+                                  docker-compose -f docker-compose.yml -f docker-compose.dev.yml -p dev --env-file env.dev.yml up --build
                         - name: Test
                           run: docker exec -it dev_api_1 pytest --cov
                         - name: Upload coverage
