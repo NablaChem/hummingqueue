@@ -1,0 +1,16 @@
+name: server-test
+on: push
+jobs:
+        test:
+                runs-on: ubuntu-latest
+                steps:
+                        - uses: actions/checkout@v2
+                        - name: Build the stack
+                          run: docker-compose up -d
+                        - name: Test
+                          run: docker exec -it dev_api_1 pytest --cov
+                        - name: Upload coverage
+                          run: |
+                                curl -Os https://uploader.codecov.io/v0.1.0_4653/linux/codecov
+                                chmod +x codecov
+                                ./codecov -t ${{ secrets.CODECOV_TOKEN }}
