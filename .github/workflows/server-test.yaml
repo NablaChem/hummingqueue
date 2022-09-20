@@ -22,7 +22,7 @@ jobs:
                         - name: Install dependencies
                           run: |
                                 python -m pip install --upgrade pip
-                                pip install -r src/user/hq/requirements.txt
+                                pip install -r src/user/requirements.txt
                         - name: Test User
                           run: |
                                 cd src/user/hq
