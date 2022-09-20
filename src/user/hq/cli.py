@@ -1,6 +1,5 @@
 import click
 import sys
-from . import job
 import glob
 import time as modtime
 from typing import List

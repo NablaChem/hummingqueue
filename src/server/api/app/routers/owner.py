@@ -37,7 +37,11 @@ def owner_create(body: AdminAuth):
     return {"owner_token": owner_token}
 
 
-class OwnerFirstTimeAuth(BaseModel):
+class SignedRequest(BaseModel):
+    unixtime: int = Field(..., description="Time of signature.")
+
+
+class OwnerFirstTimeAuth(SignedRequest):
     owner_token: str = Field(..., description="Owner token.")
     public_key: str = Field(..., description="Base64-encoded DER format public key.")
 
