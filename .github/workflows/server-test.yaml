@@ -10,7 +10,7 @@ jobs:
                                   cd src/server/
                                   docker volume create dev-mongodb
                                   docker volume create dev-minio
-                                  docker-compose -f docker-compose.yml -f docker-compose.dev.yml -p dev --env-file env.dev.yml up --build
+                                  docker-compose -f docker-compose.yml -f docker-compose.dev.yml -p dev --env-file env.dev.yml up --build -d
                         - name: Test
                           run: docker exec -it dev_api_1 pytest --cov
                         - name: Upload coverage
