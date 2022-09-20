@@ -11,10 +11,19 @@ jobs:
                                   docker volume create dev-mongodb
                                   docker volume create dev-minio
                                   docker-compose -f docker-compose.yml -f docker-compose.dev.yml -p dev --env-file env.dev.yml up --build -d
-                        - name: Test
-                          run: docker exec dev_api_1 pytest --cov=./ --cov-report=xml
+                        - name: Test Server
+                          run: |
+                                docker exec dev_api_1 pytest --cov=./
+                                docker cp dev_api_1:/code/.coverage src/server/api/.coverage
+                        - name: Test User
+                          run: |
+                                cd src/user/hq
+                                pytest --cov=./
+                                cd ../../../
+                        - name: Combine
+                          run: coverage combine  src/user/hq/.coverage src/server/api/.coverage
                         - name: Upload coverage
                           run: |
                                 curl -Os https://uploader.codecov.io/v0.1.0_4653/linux/codecov
                                 chmod +x codecov
-                                ./codecov -t ${{ secrets.CODECOV_TOKEN }} -R src/server
+                                ./codecov -t ${{ secrets.CODECOV_TOKEN }}
