@@ -7,13 +7,13 @@ jobs:
                         - uses: actions/checkout@v2
                         - name: Build the stack
                           run: |
-                                  cd src/server/
-                                  docker volume create dev-mongodb
-                                  docker volume create dev-minio
-                                  docker-compose -f docker-compose.yml -f docker-compose.dev.yml -p dev --env-file env.dev.yml up --build -d
+                                cd src/server/
+                                docker volume create dev-mongodb
+                                docker volume create dev-minio
+                                docker-compose -f docker-compose.yml -f docker-compose.dev.yml -p dev --env-file env.dev.yml up --build -d
                         - name: Test Server
                           run: |
-                                  docker exec dev_api_1 pytest --cov=./ --cov-report xml:coverage.xml
+                                docker exec dev_api_1 pytest --cov=./ --cov-report xml:coverage.xml
                                 docker cp dev_api_1:/code/coverage.xml src/server/api/coverage.xml
                         - name: Set up Python 3.10
                           uses: actions/setup-python@v4
