@@ -51,7 +51,7 @@ services:
 
   api:
     build:
-      context: "api"
+      context: "server/api"
     ports:
       - "80"
     labels:
