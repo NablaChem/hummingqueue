@@ -40,20 +40,46 @@ def test_activate_owner():
     pubkey, privkey = rsa.newkeys(2048)
     pubkey_base64 = base64.b64encode(pubkey.save_pkcs1("DER")).decode("ascii")
 
-    payload = {
-        "owner_token": owner_token,
-        "public_key": pubkey_base64,
-        "challenge": challenge,
-    }
-
     def sign(payload: dict, privkey):
         message = json.dumps(payload).encode("utf8")
         signature = rsa.sign(message, privkey, "SHA-384")
         return message, base64.b64encode(signature).decode("ascii")
 
+    # unknown owner, valid signature
+    payload = {
+        "owner_token": owner_token + owner_token,
+        "public_key": pubkey_base64,
+        "challenge": challenge,
+    }
     payload, signature = sign(payload, privkey)
+    response = client.post(
+        "/owner/activate",
+        data=payload,
+        headers={"hmq-signature": signature},
+    )
+    assert response.status_code == 404
+
+    # public key invalid
+    payload = {
+        "owner_token": owner_token,
+        "public_key": "invalid",
+        "challenge": challenge,
+    }
+    payload, signature = sign(payload, privkey)
+    response = client.post(
+        "/owner/activate",
+        data=payload,
+        headers={"hmq-signature": signature},
+    )
+    assert response.status_code == 403
 
     # wrong signature
+    payload = {
+        "owner_token": owner_token,
+        "public_key": pubkey_base64,
+        "challenge": challenge,
+    }
+    payload, signature = sign(payload, privkey)
     response = client.post(
         "/owner/activate",
         data=payload,
@@ -61,6 +87,7 @@ def test_activate_owner():
     )
     assert response.status_code == 403
 
+    # everything right
     response = client.post(
         "/owner/activate",
         data=payload,
