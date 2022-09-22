@@ -13,11 +13,22 @@ client = TestClient(app)
 def test_read_main():
     response = client.get("/challenge")
     assert response.status_code == 200
+    challenge_a = response.json()["challenge"]
     renew_a = response.json()["renew_in"]
     time.sleep(3)
     response = client.get("/challenge")
     assert response.status_code == 200
+    challenge_b = response.json()["challenge"]
     renew_b = response.json()["renew_in"]
+    if challenge_a != challenge_b:
+        time.sleep(3)
+        response = client.get("/challenge")
+        assert response.status_code == 200
+        challenge_a = response.json()["challenge"]
+        renew_a = renew_b
+        renew_b = response.json()["renew_in"]
+
+    assert challenge_a == challenge_b
     assert 2.9 < renew_a - renew_b < 3.1
 
 
