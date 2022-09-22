@@ -25,12 +25,12 @@ jobs:
                                 pip install -r src/user/requirements.txt
                         - name: Test User
                           run: |
-                                cd src/user/hq
+                                cd src/user/hmq
                                 pytest --cov=./ --cov-report xml:coverage.xml
                                 cd ../../../
                         - uses: codecov/codecov-action@v3
                           with:
                                 token: ${{ secrets.CODECOV_TOKEN }}
-                                files: src/user/hq/coverage.xml,src/server/api/coverage.xml
+                                files: src/user/hmq/coverage.xml,src/server/api/coverage.xml
                                 fail_ci_if_error: true
                                 verbose: true
