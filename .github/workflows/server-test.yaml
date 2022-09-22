@@ -14,7 +14,7 @@ jobs:
                         - name: Test Server
                           run: |
                                 docker exec dev_api_1 pytest --cov=./ --cov-report xml:coverage.xml
-                                docker cp dev_api_1:/code/coverage.xml src/server/api/coverage.xml
+                                docker cp dev_api_1:/code/coverage.xml src/server/coverage.xml
                         - name: Set up Python 3.10
                           uses: actions/setup-python@v4
                           with:
@@ -31,6 +31,6 @@ jobs:
                         - uses: codecov/codecov-action@v3
                           with:
                                 token: ${{ secrets.CODECOV_TOKEN }}
-                                files: src/user/hmq/coverage.xml,src/server/api/coverage.xml
+                                files: src/user/hmq/coverage.xml,src/server/coverage.xml
                                 fail_ci_if_error: true
                                 verbose: true

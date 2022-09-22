@@ -3,5 +3,5 @@ version: "3.3"
 services:
   api:
     volumes:
-      - "./server/api/app/:/code/app/"
+      - "./server/app/:/code/app/"
 
