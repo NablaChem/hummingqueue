@@ -57,9 +57,25 @@ class JobSpec(UserAuth):
     )
 
 
-@app.get("/challenge")
+class ChallengeResponse(BaseModel):
+    challenge: str = Field(..., description="Current challenge.")
+    renew_in: int = Field(
+        ..., description="Seconds until this challenge will be renewed."
+    )
+
+
+@app.get(
+    "/challenge",
+    summary="Returns the challenge to sign in requests.",
+    description="The challenge needs to be included in all signed requests and helps protect against replay attacks. Requests using the last two challenges will be accepted, but you should renew the challenge before the time in the response runs out. You may not rely on the challenge validity being always identical.",
+    tags=["authentication"],
+    responses={
+        200: {"description": "Normal execution.", "model": ChallengeResponse},
+    },
+)
 def current_challenge():
-    return helpers.get_valid_challenges()["current"]
+    challenges, renew_in = helpers.get_valid_challenges()
+    return {"challenge": challenges["current"], "renew_in": renew_in}
 
 
 @app.post("/heartbeat")

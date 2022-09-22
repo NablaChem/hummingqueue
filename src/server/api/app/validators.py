@@ -17,7 +17,7 @@ def is_admin(body: BaseModel):
 
 def owner_exists(body: BaseModel):
     """Verifies the owner token resolves to a valid owner."""
-    owner = auth.db.users.find_one({"is_owner": True, "owner_token": body.owner_token})
+    owner = auth.db.users.find_one({"is_owner": True, "token": body.owner_token})
     if owner is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown owner.")
 
@@ -32,7 +32,7 @@ def owner_has_no_key(owner: dict):
         )
 
 
-def public_key_consistent(body: BaseModel, request: Request):
+async def public_key_consistent(body: BaseModel, request: Request):
     # Request is signed with the public key supplied in the payload
     try:
         pubkey = rsa.PublicKey.load_pkcs1(base64.b64decode(body.public_key), "DER")
@@ -40,7 +40,11 @@ def public_key_consistent(body: BaseModel, request: Request):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Public key invalid.")
 
     try:
-        rsa.verify(request.body(), request.headers["signature"], pubkey)
+        rsa.verify(
+            await request.body(),
+            base64.b64decode(request.headers["hmq-signature"].encode("ascii")),
+            pubkey,
+        )
     except:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Message signature not valid.")
 

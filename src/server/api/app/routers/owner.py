@@ -38,7 +38,7 @@ def owner_create(body: AdminAuth):
 
 
 class SignedRequest(BaseModel):
-    unixtime: int = Field(..., description="Time of signature.")
+    challenge: str = Field(..., description="Current challenge.")
 
 
 class OwnerFirstTimeAuth(SignedRequest):
@@ -57,14 +57,14 @@ class OwnerFirstTimeAuth(SignedRequest):
         200: {"description": "Public key stored."},
     },
 )
-def owner_activate(body: OwnerFirstTimeAuth, request: Request):
+async def owner_activate(body: OwnerFirstTimeAuth, request: Request):
     # validate request
     owner = validators.owner_exists(body)
     validators.owner_has_no_key(owner)
-    validators.public_key_consistent(body, request)
+    await validators.public_key_consistent(body, request)
 
     # handle request
     auth.db.users.update_one(
-        {"owner_token": body.owner_token, "is_owner": True},
-        {"public_key": body.public_key},
+        {"token": body.owner_token, "is_owner": True},
+        {"$set": {"public_key": body.public_key}},
     )
