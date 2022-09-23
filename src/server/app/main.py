@@ -9,7 +9,7 @@ from . import auth
 
 counter = 0
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 
 app = FastAPI()
 from .routers import owner
@@ -91,6 +91,11 @@ def register_heartbeat(body: NodeAuth, request: Request):
     heartbeat["seen"] = time.time()
     auth.db.heartbeats.replace_one(criteria, heartbeat)
     return helpers.get_valid_challenges()["current"]
+
+
+@app.get("/ping")
+def ping():
+    return Response(content="pong", media_type="text/plain")
 
 
 @app.post("/job/fetch")

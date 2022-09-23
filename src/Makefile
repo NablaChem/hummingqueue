@@ -8,5 +8,5 @@ testuser:
 	docker build -t dev-user user
 	docker run dbg
 runuser:
-	docker build -t dev-user user
-	docker run --rm -w="/" dev-user hmq $(ARGS)
+	docker build -q -t dev-user user 
+	docker run --network="host" --rm -w="/" dev-user hmq $(ARGS)
