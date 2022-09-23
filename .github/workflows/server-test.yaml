@@ -17,10 +17,11 @@ jobs:
                                 docker cp dev_api_1:/code/coverage.xml src/server/coverage.xml
                         - name: Test User
                           run: |
+                                cd src/
                                 docker build -t dev-user user
                                 docker run -d --network="host" --name devuser dev-user sleep 10000
                                 docker exec devuser pytest --cov=./ --cov-report xml:coverage.xml
-                                docker cp devuser:/code/hmq/coverage.xml src/user/hmq/coverage.xml
+                                docker cp devuser:/code/hmq/coverage.xml user/hmq/coverage.xml
                                 docker stop devuser
                         - uses: codecov/codecov-action@v3
                           with:
