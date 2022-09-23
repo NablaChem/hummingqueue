@@ -6,7 +6,7 @@ testserver:
 	docker exec dev_api_1 pytest --cov=./
 testuser:
 	docker build -t dev-user user
-	docker run dbg
+	docker run --network="host" dev-user
 runuser:
 	docker build -q -t dev-user user 
 	docker run --network="host" --rm -w="/" dev-user hmq $(ARGS)

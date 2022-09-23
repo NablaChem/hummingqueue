@@ -5,4 +5,4 @@ RUN pip install --no-cache-dir --upgrade -r /code/requirements.txt
 COPY ./ /code/
 RUN pip install .
 WORKDIR /code/hmq
-CMD ["pytest"]
+CMD ["pytest", "--cov=./"]
