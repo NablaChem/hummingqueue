@@ -1,18 +1,18 @@
 version: "3.3"
 
 services:
-  api:
+  hmq:
     volumes:
       - "./server/app/:/code/app/"
-  minio:
-    volumes:
-      - "dev-minio:/data"
   mongo:
     volumes:
-     - "dev-mongodb:/data/db"
+     - "prod-mongodb:/data/db"
+  minio:
+    volumes:
+      - "prod-minio:/data"
 
 volumes:
-  dev-minio:
+  prod-minio:
     external: True
-  dev-mongodb:
+  prod-mongodb:
     external: True

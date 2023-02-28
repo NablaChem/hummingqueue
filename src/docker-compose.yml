@@ -19,8 +19,6 @@ services:
     restart: "unless-stopped"
     ports:
      - "27017:27017"
-    volumes:
-     - "dev-mongodb:/data/db"
     environment:
      - "MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}"
      - "MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASS}"
@@ -32,39 +30,32 @@ services:
     expose:
       - 9000
       - 9001
-    volumes:
-      - "dev-minio:/data"
     environment:
       - "MINIO_ROOT_USER=${MINIO_ROOT_USER}"
       - "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASS}"
-      - "MINIO_BROWSER_REDIRECT_URL=http://s3console.lvh.me"
-      - "MINIO_DOMAIN=http://s3.lvh.me"
+      - "MINIO_BROWSER_REDIRECT_URL=http://s3console.${BASEURL}"
+      - "MINIO_DOMAIN=http://s3.${BASEURL}"
     labels:
       - "traefik.enable=true"
       - "traefik.docker.network=traefik"
       - "traefik.http.routers.minio.service=minio"
-      - "traefik.http.routers.minio.rule=Host(`s3.lvh.me`)"
+      - "traefik.http.routers.minio.rule=Host(`s3.${BASEURL}`)"
       - "traefik.http.services.minio.loadbalancer.server.port=9000"
       - "traefik.http.routers.minio-console.service=minio-console"
-      - "traefik.http.routers.minio-console.rule=Host(`s3console.lvh.me`)"
+      - "traefik.http.routers.minio-console.rule=Host(`s3console.l${BASEURL}`)"
       - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
 
-  api:
+  hmq:
     build:
       context: "server"
     ports:
       - "80"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.api.rule=Host(`api.lvh.me`)"
-      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.routers.hmq.rule=Host(`hmq.${BASEURL}`)"
+      - "traefik.http.routers.hmq.entrypoints=web"
     environment:
       - "MONGODB_CONNSTR=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo/hq"
       - "API_SALT=${API_SALT}"
       - "API_ADMINTOKEN=${API_ADMINTOKEN}"
 
-volumes:
-  dev-minio:
-    external: True
-  dev-mongodb:
-    external: True
