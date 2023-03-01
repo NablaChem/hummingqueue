@@ -11,6 +11,10 @@ services:
     volumes:
       - "prod-minio:/data"
 
+  traefik:
+    env_file:
+      - "./env.prod.SSL.yml"
+
 volumes:
   prod-minio:
     external: True
