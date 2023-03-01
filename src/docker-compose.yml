@@ -73,14 +73,27 @@ services:
       - "MINIO_BROWSER_REDIRECT_URL=http://s3console.${BASEURL}"
       - "MINIO_DOMAIN=http://s3.${BASEURL}"
     labels:
+      # general
       - "traefik.enable=true"
       - "traefik.docker.network=traefik"
-      - "traefik.http.routers.minio.service=minio"
-      - "traefik.http.routers.minio.rule=Host(`s3.${BASEURL}`)"
+
+      # MinIO
+      - "traefik.http.routers.miniosecure.entrypoints=websecure"  
+      - "traefik.http.routers.miniosecure.service=minio"
+      - "traefik.http.routers.miniosecure.rule=Host(`s3.${BASEURL}`)"
       - "traefik.http.services.minio.loadbalancer.server.port=9000"
-      - "traefik.http.routers.minio-console.service=minio-console"
-      - "traefik.http.routers.minio-console.rule=Host(`s3console.l${BASEURL}`)"
+
+      # MinIO console
+      - "traefik.http.routers.minio-consolesecure.entrypoints=websecure"  
+      - "traefik.http.routers.minio-consolesecure.service=minio-console"
+      - "traefik.http.routers.minio-consolesecure.rule=Host(`s3console.${BASEURL}`)"
       - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+
+      # HTTPS
+      - "traefik.http.routers.miniosecure.tls=true"
+      - "traefik.http.routers.miniosecure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.minio-consolesecure.tls=true"
+      - "traefik.http.routers.minio-consolesecure.tls.certresolver=letsencrypt"
 
   hmq:
     build:
@@ -88,9 +101,24 @@ services:
     ports:
       - "80"
     labels:
+      # genereal
       - "traefik.enable=true"
-      - "traefik.http.routers.hmq.rule=Host(`hmq.${BASEURL}`)"
+      - "traefik.docker.network=traefik"
+
+      # HMQ
+      - "traefik.http.routers.hmqsecure.rule=Host(`hmq.${BASEURL}`)"
+      - "traefik.http.routers.hmqsecure.entrypoints=websecure"
+
+      # HTTP 
       - "traefik.http.routers.hmq.entrypoints=web"
+      - "traefik.http.routers.hmq.rule=Host(`hmq.${BASEURL}`)"
+      - "traefik.http.middlewares.upgradeHTTP.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.upgradeHTTP.redirectscheme.permanent=true"
+      - "traefik.http.routers.hmq.middlewares=upgradeHTTP"
+
+      # HTTPS
+      - "traefik.http.routers.hmqsecure.tls=true"
+      - "traefik.http.routers.hmqsecure.tls.certresolver=letsencrypt"
     environment:
       - "MONGODB_CONNSTR=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo/hq"
       - "API_SALT=${API_SALT}"
