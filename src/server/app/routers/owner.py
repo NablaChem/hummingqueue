@@ -32,7 +32,7 @@ def owner_create(body: AdminAuth):
     validators.is_admin(body)
 
     # handle request
-    owner_token = helpers.new_token()
+    owner_token = helpers.new_token(helpers.TokenTypes.OWNER)
     auth.db.users.insert_one({"token": owner_token, "is_owner": True})
     return {"owner_token": owner_token}
 

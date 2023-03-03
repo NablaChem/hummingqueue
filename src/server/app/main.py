@@ -11,7 +11,14 @@ counter = 0
 
 from fastapi import FastAPI, Request, Response
 
-app = FastAPI()
+app = FastAPI(
+    docs_url="/",
+    redoc_url=None,
+    title="Hummingqueue API",
+    description="""## Motivation
+    
+Hummingqueue is an open-source, self-hosted, distributed, and scalable job queue for scientific computing. It is designed to be used by researchers and students to run their computations on a cluster of machines. It can be used to span nodes between a university HPC center, a cloud provider, and a home computer. It is designed to be easy to use and to integrate into existing workflows. It is also designed to be secure and to protect the privacy of its users and the data it works with.""",
+)
 from .routers import owner
 
 app.include_router(owner.app)
@@ -108,4 +115,5 @@ def job_fetch(body: JobFetch):
 
 @app.post("/job/create")
 def job_create(body: JobSpec):
-    pass
+    # validate request
+    validators.user_exists(body)

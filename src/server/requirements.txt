@@ -6,3 +6,4 @@ rsa
 pytest
 requests
 pytest-cov
+shortuuid

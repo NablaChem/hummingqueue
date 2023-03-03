@@ -1,7 +1,14 @@
 import time
 import hashlib
 from . import auth
-import secrets
+import enum
+import shortuuid
+
+
+class TokenTypes(str, enum.Enum):
+    OWNER = "O"
+    USER = "U"
+    JOB = "J"
 
 
 def get_valid_challenges():
@@ -22,5 +29,6 @@ def get_valid_challenges():
     return challenges, int(renew_seconds)
 
 
-def new_token():
-    return secrets.token_urlsafe(auth.TOKEN_BYTES)
+def new_token(type: TokenTypes):
+    """Returns a new token of the given type."""
+    return f"{type.value}-{shortuuid.random()}"

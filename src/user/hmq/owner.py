@@ -2,12 +2,16 @@ import click
 import rsa
 import base64
 import configparser
-import colorama
 import sys
 from pathlib import Path
 import json
+import urllib3
 import requests
 import time
+import structlog
+import socket
+
+CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
 
 
 def _get_config_dir():
@@ -18,14 +22,21 @@ def _get_config_file():
     return _get_config_dir() / "config.ini"
 
 
-def error(msg):
-    print(colorama.Fore.RED + "EE\t" + msg + colorama.Style.RESET_ALL)
+def warning(msg, **kwargs):
+    log = structlog.get_logger()
+    log.warning(msg, **kwargs)
+
+
+def error(msg, **kwargs):
+    log = structlog.get_logger()
+    log.error(msg, **kwargs)
     sys.exit(1)
 
 
-def bug(msg):
-    print(colorama.Fore.RED + "BB\t" + msg)
-    print(
+def bug(msg, **kwargs):
+    log = structlog.get_logger()
+    log.error(msg, **kwargs)
+    log.error(
         """This is a bug. Please make sure you updated to the latest version with
     
     pip install --upgrade hmq
@@ -35,12 +46,12 @@ If the bug persists after the update, please consider filing a bug report via
     https://github.com/NablaChem/hummingqueue/issues/new
     """
     )
-    print(colorama.Style.RESET_ALL)
     sys.exit(1)
 
 
-def success(msg):
-    print(colorama.Fore.GREEN + "II\t" + msg + colorama.Style.RESET_ALL)
+def success(msg, **kwargs):
+    log = structlog.get_logger()
+    log.info(msg, **kwargs)
 
 
 @click.group()
@@ -61,7 +72,26 @@ class API:
             base64.b64decode(privkey_base64.encode("ascii")), "DER"
         )
 
+    def _get(self, url, **kwargs):
+        return requests.get(url, verify=self._verify, **kwargs)
+
+    def _post(self, url, **kwargs):
+        return requests.post(url, verify=self._verify, **kwargs)
+
     def _clean_instance(self, instance):
+        self._verify = True
+        if instance.endswith("hmq.lvh.me"):
+            urllib3.disable_warnings()
+            warning("Detected debug domain: allowing self-signed certificates.")
+            self._verify = False
+
+        # resolve DNS
+        try:
+            socket.gethostbyname(instance)
+        except socket.gaierror:
+            error("Cannot resolve instance URL.")
+
+        # try to add http/https if not present
         cases = []
         if instance.startswith("https://") or instance.startswith("http://"):
             cases.append(instance)
@@ -69,11 +99,14 @@ class API:
             for schema in "https http".split():
                 cases.append(f"{schema}://{instance}")
 
+        # test if instance is reachable
         for case in cases:
             try:
-                response = requests.get(f"{case}/ping")
+                response = self._get(f"{case}/ping")
                 if response.status_code == 200 and response.content == b"pong":
                     return case
+            except requests.exceptions.SSLError:
+                error("Instance does not use a valid SSL certificate.")
             except:
                 pass
 
@@ -87,7 +120,7 @@ class API:
     def _update_challenge(self):
         if self._challenge is None or self._renew_at < time.time():
             try:
-                response = requests.get(f"{self._instance}/challenge").json()
+                response = self._get(f"{self._instance}/challenge").json()
             except:
                 error("Unable to reach instance to fetch current challenge.")
             self._challenge = response["challenge"]
@@ -98,7 +131,7 @@ class API:
         payload["challenge"] = self._challenge
         message, signature = self._sign(payload)
 
-        request = requests.post(
+        request = self._post(
             f"{self._instance}/{endpoint}",
             data=message,
             headers={"hmq-signature": signature},
@@ -130,11 +163,11 @@ class API:
         return response, message, request.status_code
 
 
-@owner_init_group.command()
-@click.argument("instance")
+@owner_init_group.command(context_settings=CONTEXT_SETTINGS)
+@click.option("--instance", default="https://hmq.nablachem.org", help="Instance URL")
 @click.argument("owner")
 def owner_init(instance, owner):
-    """Initializes a hardware owner account.
+    """Initializes a hardware owner account. You will need to obtain an owner token from the instance operator.
 
     This is the very first step of onboarding new resources. Generates a private key and registers the public counterpart at the hummingqueue installation INSTANCE for the user TOKEN."""
     if _get_config_file().exists():

@@ -13,4 +13,4 @@ testuser:
 	docker run --network="host" dev-user
 runuser:
 	docker build -q -t dev-user user 
-	docker run --network="host" --rm -w="/" dev-user hmq $(ARGS)
+	docker run -t --network="host" --rm -w="/" dev-user hmq $(ARGS)
