@@ -80,7 +80,7 @@ class API:
 
     def _clean_instance(self, instance):
         self._verify = True
-        if instance.endswith("hmq.lvh.me"):
+        if instance.endswith("hmq.localhost.nablachem.org"):
             urllib3.disable_warnings()
             warning("Detected debug domain: allowing self-signed certificates.")
             self._verify = False
