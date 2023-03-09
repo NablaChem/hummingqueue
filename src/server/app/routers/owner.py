@@ -167,9 +167,5 @@ async def signature_add(
     )
 
     auth.db.key_signatures.insert_one(
-        {
-            "action": await request.json(),
-            "signature": hmq_signature,
-            "user_token": user_or_owner_token,
-        }
+        {"action": await request.json(), "signature": hmq_signature}
     )
