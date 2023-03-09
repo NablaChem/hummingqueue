@@ -4,7 +4,8 @@ from . import auth
 import enum
 import shortuuid
 from datetime import datetime, timezone
-from fastapi import Header, Field
+from fastapi import Header
+from pydantic import Field
 from nacl.signing import VerifyKey
 import base64
 
