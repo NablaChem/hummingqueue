@@ -125,6 +125,15 @@ class SignKeyRequest(SignedRequest):
     reason: SignatureReason = Field(..., description="Type of signature.")
     key: str = Field(..., description="Base64-encoded key to be signed.")
 
+    class Config:
+        schema_extra = {
+            "example": {
+                "owner_token": "O-3yofQTVDveBf5U8PZf3nay",
+                "key": "NP88KNsQy2zsbP09zdyNu1NUPfgj+qm4GdEcyQZhoWs=",
+                "reason": "ADD_OWN_ENCRYPTION_KEY",
+            }
+        }
+
 
 @app.post(
     "/sign/key",
