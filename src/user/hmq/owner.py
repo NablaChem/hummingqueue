@@ -1,8 +1,10 @@
 import click
-import rsa
 import base64
 import configparser
 import sys
+from nacl.signing import SigningKey
+from nacl.public import PrivateKey
+from datetime import datetime, timezone
 from pathlib import Path
 import json
 import urllib3
@@ -67,10 +69,8 @@ class API:
         # load key from config
         config = configparser.ConfigParser()
         config.read(_get_config_file())
-        privkey_base64 = config["default"]["private"]
-        self._privkey = rsa.PrivateKey.load_pkcs1(
-            base64.b64decode(privkey_base64.encode("ascii")), "DER"
-        )
+        signkey_base64 = config["default"]["sign"]
+        self._signkey = SigningKey(base64.b64decode(signkey_base64.encode("ascii")))
 
     def _get(self, url, **kwargs):
         return requests.get(url, verify=self._verify, **kwargs)
@@ -82,7 +82,7 @@ class API:
         self._verify = True
         if instance.endswith("hmq.localhost.nablachem.org"):
             urllib3.disable_warnings()
-            warning("Detected debug domain: allowing self-signed certificates.")
+            warning("Detected development domain: allowing self-signed certificates.")
             self._verify = False
 
         # resolve DNS
@@ -113,9 +113,9 @@ class API:
         error("Instance does not answer as expected. Is the instance URL correct?")
 
     def _sign(self, payload):
-        message = json.dumps(payload).encode("utf8")
-        signature = rsa.sign(message, self._privkey, "SHA-384")
-        return message, base64.b64encode(signature).decode("ascii")
+        message = json.dumps(payload, sort_keys=True).encode("utf8")
+        signed = self._signkey.sign(message)
+        return message, base64.b64encode(signed.signature).decode("ascii")
 
     def _update_challenge(self):
         if self._challenge is None or self._renew_at < time.time():
@@ -129,6 +129,8 @@ class API:
     def post(self, endpoint: str, payload: dict):
         self._update_challenge()
         payload["challenge"] = self._challenge
+        payload["time"] = int(datetime.now(timezone.utc).timestamp())
+
         message, signature = self._sign(payload)
 
         request = self._post(
@@ -139,9 +141,15 @@ class API:
         response = request.content
         message = None
         if str(request.status_code).startswith("2"):
-            response = request.json()
+            try:
+                response = request.json()
+            except:
+                bug("Server response is not JSON.")
         else:
-            errordesc = request.json()
+            try:
+                errordesc = request.json()
+            except:
+                bug("Server response is not JSON, indicating a server error.")
 
             # field missing?
             msg = None
@@ -173,15 +181,23 @@ def owner_init(instance, owner):
     if _get_config_file().exists():
         error("Setup has been run already.")
 
-    pubkey, privkey = rsa.newkeys(2048)
-    pubkey_base64 = base64.b64encode(pubkey.save_pkcs1("DER")).decode("ascii")
-    privkey_base64 = base64.b64encode(privkey.save_pkcs1("DER")).decode("ascii")
+    # generate signing key
+    signing_key = SigningKey.generate()
+    verify_key = signing_key.verify_key
+    signing_key_base64 = base64.b64encode(signing_key.encode()).decode("ascii")
+    verify_key_base64 = base64.b64encode(verify_key.encode()).decode("ascii")
 
-    # persist key
+    # generate encryption key
+    encryption_key = PrivateKey.generate()
+    encryption_key_base64 = base64.b64encode(encryption_key.encode()).decode("ascii")
+    public_key = encryption_key.public_key
+    public_key_base64 = base64.b64encode(public_key.encode()).decode("ascii")
+
+    # persist keys
     config = configparser.ConfigParser()
     config["default"] = {
-        "public": pubkey_base64,
-        "private": privkey_base64,
+        "sign": signing_key_base64,
+        "encrypt": encryption_key_base64,
         "instance": instance,
     }
     if not _get_config_dir().exists():
@@ -189,10 +205,25 @@ def owner_init(instance, owner):
     with open(_get_config_file(), "w") as fh:
         config.write(fh)
 
-    # submit key
-    payload = {"owner_token": owner, "public_key": pubkey_base64}
+    # submit signing key
+    payload = {
+        "owner_token": owner,
+        "verify_key": verify_key_base64,
+    }
+
     api = API(instance)
     response, message, status = api.post("owner/activate", payload)
     if status != 200:
-        error(f"Unable to upload public key: {message}")
-    success(f"Public key set up for {instance}.")
+        error(f"Unable to upload signing key: {message}")
+    success(f"Signing key set up for {instance}.")
+
+    # submit encryption key
+    payload = {
+        "owner_token": owner,
+        "key": public_key_base64,
+        "reason": "ADD_OWN_ENCRYPTION_KEY",
+    }
+    response, message, status = api.post("sign/key", payload)
+    if status != 200:
+        error(f"Unable to upload encryption key: {message}")
+    success(f"Encryption key set up for {instance}.")

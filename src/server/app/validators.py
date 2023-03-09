@@ -2,8 +2,10 @@ from multiprocessing.sharedctypes import Value
 from . import auth
 from . import helpers
 import secrets
+import json
 from fastapi import HTTPException, status, Request
-import rsa
+from nacl.signing import VerifyKey
+import nacl
 import base64
 from pydantic import BaseModel
 
@@ -24,26 +26,96 @@ def owner_exists(body: BaseModel):
     return owner
 
 
-def owner_has_no_key(owner: dict):
-    """Verifies no public key is set for that owner."""
-    if "public_key" in owner:
+def user_or_owner_exists(body: BaseModel) -> str:
+    checked_owner = False
+    checked_user = False
+
+    if "user_token" in body.dict():
+        checked_owner = True
+        owner = auth.db.users.find_one({"is_owner": True, "token": body.owner_token})
+        if owner is not None:
+            return owner["token"]
+
+    if "user_token" in body.dict():
+        checked_user = True
+        user = auth.db.users.find_one({"is_owner": False, "token": body.user_token})
+        if user is not None:
+            return user["token"]
+
+    if checked_owner or checked_user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown user or owner.")
+    else:
         raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Owner already has a public key assigned."
+            status.HTTP_404_NOT_FOUND, "No user or owner token supplied."
         )
+
+
+def owner_has_no_key(owner: dict):
+    """Verifies no verify key is set for that owner."""
+    if "verify_key" in owner:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Owner already has a verify key assigned."
+        )
+
+
+def time_window_valid(model: BaseModel):
+    if abs(helpers.utc_now() - model.time) > auth.MAXIMUM_REQUEST_AGE_SECONDS:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            f"Message timestamp outside of time window of {auth.MAXIMUM_REQUEST_AGE_SECONDS} seconds.",
+        )
+
+
+async def verify_signed_request(
+    model: BaseModel,
+    request: Request,
+    authority: str,
+    hmq_signature: str = helpers.HMQ_SIGNATURE_HEADER,
+):
+    # check time
+    time_window_valid(model)
+
+    # challenge valid
+    if model.challenge not in helpers.get_valid_challenges()[0].values():
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Challenge not valid.",
+        )
+
+    # signature valid
+    try:
+        verify_key = helpers.get_verify_key(authority)
+    except:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "No verify key found for this user or owner token.",
+        )
+
+    payload = json.dumps(await request.json(), sort_keys=True).encode("utf-8")
+    try:
+        verify_key.verify(
+            payload,
+            base64.b64decode(hmq_signature.encode("ascii")),
+        )
+    except:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "Signature verification failed.",
+        )
+    return payload
 
 
 async def public_key_consistent(body: BaseModel, request: Request):
     # Request is signed with the public key supplied in the payload
     try:
-        pubkey = rsa.PublicKey.load_pkcs1(base64.b64decode(body.public_key), "DER")
+        verify_key = VerifyKey(base64.b64decode(body.verify_key))
     except:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Public key invalid.")
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Verify key invalid.")
 
     try:
-        rsa.verify(
+        verify_key.verify(
             await request.body(),
             base64.b64decode(request.headers["hmq-signature"].encode("ascii")),
-            pubkey,
         )
     except:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Message signature not valid.")
@@ -55,16 +127,17 @@ def compute_token_valid(body: BaseModel, owner: dict):
             status.HTTP_403_FORBIDDEN, "No public key specified for this owner."
         )
 
-    pubkey = rsa.PublicKey.load_pkcs1(base64.b64decode(owner["public_key"]), "DER")
+    verify_key = VerifyKey(base64.b64decode(owner["verify_key"]))
     challenges = helpers.get_valid_challenges()
     valid = False
     for challenge_kind in ["current", "previous"]:
         try:
-            rsa.verify(
-                challenges[challenge_kind].encode("utf8"), body.compute_token, pubkey
+            verify_key.verify(
+                challenges[challenge_kind].encode("utf8"),
+                body.compute_token,
             )
             valid = True
-        except:
+        except nacl.exceptions.BadSignatureError:
             pass
     if not valid:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Invalid compute token.")

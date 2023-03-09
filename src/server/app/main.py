@@ -1,7 +1,9 @@
 from multiprocessing.sharedctypes import Value
 from pydantic import BaseModel, Field, constr, root_validator
 from typing import List, Optional
+from fastapi.responses import HTMLResponse
 import time
+import inspect
 
 from . import validators
 from . import helpers
@@ -12,16 +14,28 @@ counter = 0
 from fastapi import FastAPI, Request, Response
 
 app = FastAPI(
-    docs_url="/",
+    docs_url=None,
     redoc_url=None,
     title="Hummingqueue API",
     description="""## Motivation
     
-Hummingqueue is an open-source, self-hosted, distributed, and scalable job queue for scientific computing. It is designed to be used by researchers and students to run their computations on a cluster of machines. It can be used to span nodes between a university HPC center, a cloud provider, and a home computer. It is designed to be easy to use and to integrate into existing workflows. It is also designed to be secure and to protect the privacy of its users and the data it works with.""",
-)
-from .routers import owner
+Hummingqueue is an open-source, self-hosted, distributed, and scalable job queue for scientific computing. It is designed to be used by researchers and students to run their computations on a cluster of machines. It can be used to span nodes between a university HPC center, a cloud provider, and a home computer. It is designed to be easy to use and to integrate into existing workflows. It is also designed to be secure and to protect the privacy of its users and the data it works with.
 
-app.include_router(owner.app)
+## Authentication
+Almost all requests are signed where the signature is expected in the header *hmq-signature* of the request. The signature is a base64-encoded Curve25519 signature of the JSON request body where the entries (also nested entries) are sorted by key.
+""",
+)
+
+# add routes
+routes = ["owner"]
+for route in routes:
+    module = __import__(f"app.routers.{route}", fromlist=["app"])
+
+    for objname, obj in inspect.getmembers(module, inspect.isclass):
+        if issubclass(obj, BaseModel):
+            helpers.build_schema_example(obj)
+
+    app.include_router(module.app)
 
 
 class NodeAuth(BaseModel):
@@ -100,7 +114,12 @@ def register_heartbeat(body: NodeAuth, request: Request):
     return helpers.get_valid_challenges()["current"]
 
 
-@app.get("/ping")
+@app.get(
+    "/ping",
+    tags=["authentication"],
+    summary="Check whether the server is up.",
+    responses={200: {"description": "Server is up."}},
+)
 def ping():
     return Response(content="pong", media_type="text/plain")
 
@@ -117,3 +136,48 @@ def job_fetch(body: JobFetch):
 def job_create(body: JobSpec):
     # validate request
     validators.user_exists(body)
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+async def rapidoc():
+    return (
+        """
+        <!doctype html>
+        <html>
+            <head>
+                <meta charset="utf-8">
+                <script 
+                    type="module" 
+                    src="https://unpkg.com/rapidoc/dist/rapidoc-min.js"
+                ></script>
+            </head>
+            <body>
+            <style>
+                    rapi-doc::part(section-operation-tag) {
+                    display:none;
+                    }
+            </style>
+            <rapi-doc 
+                spec-url='"""
+        + app.openapi_url
+        + """'
+                render-style="focused" 
+                show-header="false" 
+                allow-server-selection="false" 
+                allow-authentication="false" 
+                schema-description-expanded="true" 
+                default-schema-tab="schema"
+                primary-color="#1F3664"
+                show-method-in-nav-bar="as-colored-block"
+                nav-bg-color="#1F3664"
+                nav-text-color="#ffffff"
+                nav-accent-color="#dd9633"
+                font-size="largest"
+                schema-description-expanded="true"
+                schema-style="table"
+                use-path-in-nav-bar="true"
+                ></rapi-doc>
+            </body> 
+        </html>
+    """
+    )

@@ -6,3 +6,4 @@ db = pymongo.MongoClient(mongo_connstr)[mongo_db]
 salt = os.getenv("API_SALT")
 admin_token = os.getenv("API_ADMINTOKEN")
 CHALLENGE_PERIOD_LENGTH_SECONDS = 3600
+MAXIMUM_REQUEST_AGE_SECONDS = 30
