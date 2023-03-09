@@ -71,6 +71,21 @@ class OwnerFirstTimeAuth(SignedRequest):
         }
 
 
+class UserFirstTimeAuth(SignedRequest):
+    user_token: str = Field(..., description="User token.", regex="^U-[A-Za-z0-9]+$")
+    verify_key: str = Field(
+        ..., description="Base64-encoded Curve25519 signature verify key."
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "user_token": "U-3yofQTVDveBf5U8PZf3nay",
+                "verify_key": "EXThJPyCI8/lKjWvD8EouAaYi3nwMIDN3cct43n0ES4=",
+            }
+        }
+
+
 class EmptyResponse(BaseModel):
     ...
 
@@ -107,8 +122,9 @@ async def owner_activate(
     )
 
 
-class SignatureReason(str, enum.Enum):
+class KeySignatureReason(str, enum.Enum):
     ADD_OWN_ENCRYPTION_KEY = "ADD_OWN_ENCRYPTION_KEY"
+    AUTHORIZE_USER = "AUTHORIZE_USER"
 
 
 class SignKeyRequest(SignedRequest):
@@ -122,7 +138,7 @@ class SignKeyRequest(SignedRequest):
         description="Owner token for the user who is signing the key.",
         regex="^O-[A-Za-z0-9]+$",
     )
-    reason: SignatureReason = Field(..., description="Type of signature.")
+    reason: KeySignatureReason = Field(..., description="Type of signature.")
     key: str = Field(..., description="Base64-encoded key to be signed.")
 
     class Config:
@@ -168,4 +184,52 @@ async def signature_add(
 
     auth.db.key_signatures.insert_one(
         {"action": await request.json(), "signature": hmq_signature}
+    )
+
+
+@app.post(
+    "/user/create",
+    summary="Creates a new user.",
+    description="Open for everybody.",
+    tags=["authentication"],
+    responses={
+        200: {"description": "User created."},
+    },
+)
+def user_create():
+    # handle request
+    user_token = helpers.new_token(helpers.TokenTypes.USER)
+    auth.db.users.insert_one({"token": user_token, "is_owner": False})
+    return {"user_token": user_token}
+
+
+@app.post(
+    "/user/activate",
+    summary="Initial setup for a new user.",
+    description="The user-supplied verify key will be used for future authentication. Can only be called once for a given user.",
+    tags=["authentication"],
+    responses={
+        404: {"description": "No such user."},
+        403: {"description": "Authentication error."},
+        200: {
+            "description": "Signature verification key successfully stored.",
+            "model": EmptyResponse,
+        },
+    },
+)
+async def user_activate(
+    body: UserFirstTimeAuth,
+    request: Request,
+    hmq_signature: str = helpers.HMQ_SIGNATURE_HEADER,
+):
+    # validate request
+    user = validators.user_exists(body)
+    validators.user_has_no_key(user)
+    await validators.public_key_consistent(body, request)
+    validators.time_window_valid(body)
+
+    # handle request
+    auth.db.users.update_one(
+        {"token": body.user_token, "is_owner": False},
+        {"$set": {"verify_key": body.verify_key}},
     )

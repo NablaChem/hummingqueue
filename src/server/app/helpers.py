@@ -4,13 +4,18 @@ from . import auth
 import enum
 import shortuuid
 from datetime import datetime, timezone
-from fastapi import Header
+from fastapi import Header, Field
 from nacl.signing import VerifyKey
 import base64
 
 HMQ_SIGNATURE_HEADER = Header(
     default=None,
     description="Base-64 encoded signature of the request body.",
+)
+OWNER_TOKEN_FIELD = Field(
+    None,
+    description="Owner token for the user who is signing the key.",
+    regex="^O-[A-Za-z0-9]+$",
 )
 
 
