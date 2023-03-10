@@ -192,6 +192,72 @@ class API:
         return response, message, request.status_code
 
 
+KeySet = collections.namedtuple("KeySet", "sign verify encrypt public")
+
+
+def _generate_keys():
+    signing_key = SigningKey.generate()
+    verify_key = signing_key.verify_key
+    signing_key_base64 = base64.b64encode(signing_key.encode()).decode("ascii")
+    verify_key_base64 = base64.b64encode(verify_key.encode()).decode("ascii")
+
+    # generate encryption key
+    encryption_key = PrivateKey.generate()
+    encryption_key_base64 = base64.b64encode(encryption_key.encode()).decode("ascii")
+    public_key = encryption_key.public_key
+    public_key_base64 = base64.b64encode(public_key.encode()).decode("ascii")
+    return KeySet(
+        signing_key_base64, verify_key_base64, encryption_key_base64, public_key_base64
+    )
+
+
+def _submit_keys(keys: KeySet, role: APIRole, instance: str, token: str):
+    prefix = "owner"
+    if role is APIRole.USER:
+        prefix = "user"
+    # submit signing key
+    payload = {f"{prefix}_token": token, "verify_key": keys.verify}
+    api = API(instance)
+    response, message, status = api.post("{prefix}/activate", payload, role=role)
+    if status != 200:
+        error("Unable to upload signing key", error=message)
+    success("Owner signing key set up.", instance=instance)
+
+    # submit encryption key
+    payload = {
+        f"{prefix}_token": token,
+        "key": keys.public,
+        "reason": "ADD_OWN_ENCRYPTION_KEY",
+    }
+    response, message, status = api.post("sign/key", payload, role=role)
+    if status != 200:
+        error("Unable to upload encryption key.", error=message)
+    success("Owner encryption key set up.", instance=instance)
+
+
+def _create_user(instance: str):
+    api = API(instance)
+    response, message, status = api.post("user/create", {}, role=APIRole.NONE)
+    user = response["user_token"]
+    if status != 200:
+        error("Unable to generate own user token.", error=message)
+    success("Generated new user token.", instance=instance, token=user)
+    return user
+
+
+def _authorize_user(instance, owner, user_key):
+    api = API(instance)
+    payload = {
+        "owner_token": owner,
+        "key": user_key,
+        "reason": "AUTHORIZE_USER",
+    }
+    response, message, status = api.post("sign/key", payload, role=APIRole.OWNER)
+    if status != 200:
+        error("Unable to authorize user.", error=message)
+    success("Authorized user.", instance=instance)
+
+
 @owner_init_group.command(context_settings=CONTEXT_SETTINGS)
 @click.option("--instance", default="https://hmq.nablachem.org", help="Instance URL")
 @click.argument("owner")
@@ -202,109 +268,40 @@ def owner_init(instance, owner):
     if _get_config_file().exists():
         error("Setup has been run already.")
 
-    # generate signing key
-    signing_key = SigningKey.generate()
-    verify_key = signing_key.verify_key
-    signing_key_base64 = base64.b64encode(signing_key.encode()).decode("ascii")
-    verify_key_base64 = base64.b64encode(verify_key.encode()).decode("ascii")
-
-    # generate encryption key
-    encryption_key = PrivateKey.generate()
-    encryption_key_base64 = base64.b64encode(encryption_key.encode()).decode("ascii")
-    public_key = encryption_key.public_key
-    public_key_base64 = base64.b64encode(public_key.encode()).decode("ascii")
+    keys_owner = _generate_keys()
+    _submit_keys(keys_owner, APIRole.OWNER, instance, owner)
 
     # persist keys
     config = configparser.ConfigParser()
     config["owner"] = {
-        "sign": signing_key_base64,
-        "encrypt": encryption_key_base64,
+        "sign": keys_owner.sign,
+        "encrypt": keys_owner.encrypt,
         "instance": instance,
+        "token": owner,
     }
     if not _get_config_dir().exists():
         _get_config_dir().mkdir()
     with open(_get_config_file(), "w") as fh:
         config.write(fh)
 
-    # submit signing key
-    payload = {
-        "owner_token": owner,
-        "verify_key": verify_key_base64,
-    }
-
-    api = API(instance)
-    response, message, status = api.post("owner/activate", payload, role=APIRole.OWNER)
-    if status != 200:
-        error("Unable to upload signing key", error=message)
-    success("Owner signing key set up.", instance=instance)
-
-    # submit encryption key
-    payload = {
-        "owner_token": owner,
-        "key": public_key_base64,
-        "reason": "ADD_OWN_ENCRYPTION_KEY",
-    }
-    response, message, status = api.post("sign/key", payload, role=APIRole.OWNER)
-    if status != 200:
-        error("Unable to upload encryption key.", error=message)
-    success("Owner encryption key set up.", instance=instance)
-
     # create user
-    payload = {}
-    response, message, status = api.post("user/create", payload, role=APIRole.NONE)
-    user = response["user_token"]
-    if status != 200:
-        error("Unable to generate own user token.", error=message)
-    success("Generated new user token.", instance=instance, token=user)
-
-    # generate signing key
-    signing_key = SigningKey.generate()
-    verify_key = signing_key.verify_key
-    signing_key_base64 = base64.b64encode(signing_key.encode()).decode("ascii")
-    verify_key_base64 = base64.b64encode(verify_key.encode()).decode("ascii")
-
-    # generate encryption key
-    encryption_key = PrivateKey.generate()
-    encryption_key_base64 = base64.b64encode(encryption_key.encode()).decode("ascii")
-    public_key = encryption_key.public_key
-    public_key_base64 = base64.b64encode(public_key.encode()).decode("ascii")
+    user = _create_user(instance)
+    keys_user = _generate_keys()
 
     config["user"] = {
-        "sign": signing_key_base64,
-        "encrypt": encryption_key_base64,
+        "sign": keys_user.sign,
+        "encrypt": keys_user.encrypt,
         "instance": instance,
+        "token": user,
     }
     with open(_get_config_file(), "w") as fh:
         config.write(fh)
 
-    api = API(instance)
-    payload = {
-        "user_token": user,
-        "verify_key": verify_key_base64,
-    }
-    response, message, status = api.post("user/activate", payload, role=APIRole.USER)
-    if status != 200:
-        error("Unable to upload signing key.", error=message)
-    success("Signing key set up.", instance=instance)
-
-    # submit encryption key
-    payload = {
-        "user_token": user,
-        "key": public_key_base64,
-        "reason": "ADD_OWN_ENCRYPTION_KEY",
-    }
-    response, message, status = api.post("sign/key", payload, role=APIRole.USER)
-    if status != 200:
-        error("Unable to upload encryption key.", error=message)
-    success("Encryption key set up.", instance=instance)
+    _submit_keys(keys_user, APIRole.User, instance, user)
 
     # authorize user
-    payload = {
-        "owner_token": owner,
-        "key": public_key_base64,
-        "reason": "AUTHORIZE_USER",
-    }
-    response, message, status = api.post("sign/key", payload, role=APIRole.OWNER)
-    if status != 200:
-        error("Unable to authorize user.", error=message)
-    success("Created user.", instance=instance)
+    _authorize_user(instance, owner, keys_user.verify)
+
+    config["aliases"] = {user: "MYSELF"}
+    with open(_get_config_file(), "w") as fh:
+        config.write(fh)
