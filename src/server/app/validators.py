@@ -17,13 +17,22 @@ def is_admin(body: BaseModel):
         )
 
 
-def owner_exists(body: BaseModel):
+def owner_exists(body: BaseModel) -> dict:
     """Verifies the owner token resolves to a valid owner."""
     owner = auth.db.users.find_one({"is_owner": True, "token": body.owner_token})
     if owner is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown owner.")
 
     return owner
+
+
+def project_exists(body: BaseModel) -> dict:
+    """Verifies the project token resolves to a valid project."""
+    project = auth.db.projects.find_one({"token": body.project_token})
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown project.")
+
+    return project
 
 
 def user_exists(body: BaseModel):

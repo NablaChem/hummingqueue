@@ -176,6 +176,7 @@ async def rapidoc():
                 schema-description-expanded="true"
                 schema-style="table"
                 use-path-in-nav-bar="true"
+                sort-endpoints-by="path"
                 ></rapi-doc>
             </body> 
         </html>

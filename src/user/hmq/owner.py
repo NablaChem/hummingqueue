@@ -1,5 +1,6 @@
 import click
 import base64
+import collections
 import configparser
 import sys
 from nacl.signing import SigningKey
@@ -15,6 +16,7 @@ import structlog
 import socket
 
 CONTEXT_SETTINGS = dict(help_option_names=["-h", "--help"])
+KeySet = collections.namedtuple("KeySet", "sign verify encrypt public")
 
 
 def _get_config_dir():
@@ -68,23 +70,34 @@ class APIRole(str, enum.Enum):
     NONE = "none"
 
 
+class Resource(str, enum.Enum):
+    USER = "user"
+    PROJECT = "project"
+
+
 class API:
-    def __init__(self, instance):
+    def __init__(self, instance, empty=False):
         self._instance = self._clean_instance(instance)
         self._challenge = None
 
         # load key from config
-        config = configparser.ConfigParser()
-        config.read(_get_config_file())
-        self._signkeys = dict()
-        for role in "owner user".split():
+        if not empty:
+            config = configparser.ConfigParser()
+            config.read(_get_config_file())
+            self._signkeys = dict()
+            self._owner_token = config["owner"]["token"]
             try:
-                signkey_base64 = config[role]["sign"]
-            except:
-                continue
-            self._signkeys[role] = SigningKey(
-                base64.b64decode(signkey_base64.encode("ascii"))
-            )
+                self._user_token = config["user"]["token"]
+            except KeyError:
+                pass
+            for role in "owner user".split():
+                try:
+                    signkey_base64 = config[role]["sign"]
+                except:
+                    continue
+                self._signkeys[role] = SigningKey(
+                    base64.b64decode(signkey_base64.encode("ascii"))
+                )
 
     def _get(self, url, **kwargs):
         return requests.get(url, verify=self._verify, **kwargs)
@@ -191,71 +204,91 @@ class API:
             bug(f"Unable to deal with server response from {endpoint}: {errordesc}")
         return response, message, request.status_code
 
+    @staticmethod
+    def generate_keys() -> KeySet:
+        signing_key = SigningKey.generate()
+        verify_key = signing_key.verify_key
+        signing_key_base64 = base64.b64encode(signing_key.encode()).decode("ascii")
+        verify_key_base64 = base64.b64encode(verify_key.encode()).decode("ascii")
 
-KeySet = collections.namedtuple("KeySet", "sign verify encrypt public")
+        # generate encryption key
+        encryption_key = PrivateKey.generate()
+        encryption_key_base64 = base64.b64encode(encryption_key.encode()).decode(
+            "ascii"
+        )
+        public_key = encryption_key.public_key
+        public_key_base64 = base64.b64encode(public_key.encode()).decode("ascii")
+        return KeySet(
+            signing_key_base64,
+            verify_key_base64,
+            encryption_key_base64,
+            public_key_base64,
+        )
 
+    def submit_keys(self, keys: KeySet, role: APIRole, token: str):
+        prefix = "owner"
+        if role is APIRole.USER:
+            prefix = "user"
 
-def _generate_keys():
-    signing_key = SigningKey.generate()
-    verify_key = signing_key.verify_key
-    signing_key_base64 = base64.b64encode(signing_key.encode()).decode("ascii")
-    verify_key_base64 = base64.b64encode(verify_key.encode()).decode("ascii")
+        # submit signing key
+        payload = {f"{prefix}_token": token, "verify_key": keys.verify}
 
-    # generate encryption key
-    encryption_key = PrivateKey.generate()
-    encryption_key_base64 = base64.b64encode(encryption_key.encode()).decode("ascii")
-    public_key = encryption_key.public_key
-    public_key_base64 = base64.b64encode(public_key.encode()).decode("ascii")
-    return KeySet(
-        signing_key_base64, verify_key_base64, encryption_key_base64, public_key_base64
-    )
+        response, message, status = self.post(f"{prefix}/activate", payload, role=role)
+        if status != 200:
+            error("Unable to upload signing key", error=message)
+        success(f"{prefix.capitalize()} signing key set up.", instance=self._instance)
 
+        # submit encryption key
+        payload = {
+            f"{prefix}_token": token,
+            "key": keys.public,
+            "reason": "ADD_OWN_ENCRYPTION_KEY",
+        }
+        response, message, status = self.post("user/sign", payload, role=role)
+        if status != 200:
+            error("Unable to upload encryption key.", error=message)
+        success(
+            f"{prefix.capitalize()} encryption key set up.", instance=self._instance
+        )
 
-def _submit_keys(keys: KeySet, role: APIRole, instance: str, token: str):
-    prefix = "owner"
-    if role is APIRole.USER:
-        prefix = "user"
-    # submit signing key
-    payload = {f"{prefix}_token": token, "verify_key": keys.verify}
-    api = API(instance)
-    response, message, status = api.post("{prefix}/activate", payload, role=role)
-    if status != 200:
-        error("Unable to upload signing key", error=message)
-    success("Owner signing key set up.", instance=instance)
+    def create_resource(self, resource: Resource) -> str:
+        response, message, status = self.post(
+            f"{resource.value}/create", {}, role=APIRole.NONE
+        )
+        token = response[f"{resource.value}_token"]
+        if status != 200:
+            error(f"Unable to generate {resource.value} token.", error=message)
+        success(
+            f"Generated new {resource.value} token.",
+            instance=self._instance,
+            token=token,
+        )
+        return token
 
-    # submit encryption key
-    payload = {
-        f"{prefix}_token": token,
-        "key": keys.public,
-        "reason": "ADD_OWN_ENCRYPTION_KEY",
-    }
-    response, message, status = api.post("sign/key", payload, role=role)
-    if status != 200:
-        error("Unable to upload encryption key.", error=message)
-    success("Owner encryption key set up.", instance=instance)
+    def authorize_user(self, user_key):
+        payload = {
+            "owner_token": self._owner_token,
+            "key": user_key,
+            "reason": "AUTHORIZE_USER",
+        }
+        response, message, status = self.post("user/sign", payload, role=APIRole.OWNER)
+        if status != 200:
+            error("Unable to authorize user.", error=message)
+        success("Authorized user.", instance=self._instance)
 
-
-def _create_user(instance: str):
-    api = API(instance)
-    response, message, status = api.post("user/create", {}, role=APIRole.NONE)
-    user = response["user_token"]
-    if status != 200:
-        error("Unable to generate own user token.", error=message)
-    success("Generated new user token.", instance=instance, token=user)
-    return user
-
-
-def _authorize_user(instance, owner, user_key):
-    api = API(instance)
-    payload = {
-        "owner_token": owner,
-        "key": user_key,
-        "reason": "AUTHORIZE_USER",
-    }
-    response, message, status = api.post("sign/key", payload, role=APIRole.OWNER)
-    if status != 200:
-        error("Unable to authorize user.", error=message)
-    success("Authorized user.", instance=instance)
+    def join_project(self, project_token: str, alias: str):
+        payload = {
+            "owner_token": self._owner_token,
+            "project_token": project_token,
+            "reason": "JOIN_PROJECT",
+            "alias": alias,
+        }
+        response, message, status = self.post(
+            "project/join", payload, role=APIRole.OWNER
+        )
+        if status != 200:
+            error("Unable to join project.", error=message)
+        success("Join project.", instance=self._instance)
 
 
 @owner_init_group.command(context_settings=CONTEXT_SETTINGS)
@@ -268,8 +301,9 @@ def owner_init(instance, owner):
     if _get_config_file().exists():
         error("Setup has been run already.")
 
-    keys_owner = _generate_keys()
-    _submit_keys(keys_owner, APIRole.OWNER, instance, owner)
+    # Stub API
+    api = API(instance, empty=True)
+    keys_owner = API.generate_keys()
 
     # persist keys
     config = configparser.ConfigParser()
@@ -284,9 +318,15 @@ def owner_init(instance, owner):
     with open(_get_config_file(), "w") as fh:
         config.write(fh)
 
+    api = API(instance)
+    api.submit_keys(keys_owner, APIRole.OWNER, owner)
+
+    # reload credentials
+    api = API(instance)
+
     # create user
-    user = _create_user(instance)
-    keys_user = _generate_keys()
+    user = api.create_resource(Resource.USER)
+    keys_user = API.generate_keys()
 
     config["user"] = {
         "sign": keys_user.sign,
@@ -297,11 +337,21 @@ def owner_init(instance, owner):
     with open(_get_config_file(), "w") as fh:
         config.write(fh)
 
-    _submit_keys(keys_user, APIRole.User, instance, user)
+    api = API(instance)
+    api.submit_keys(keys_user, APIRole.USER, user)
 
     # authorize user
-    _authorize_user(instance, owner, keys_user.verify)
+    api.authorize_user(keys_user.verify)
 
     config["aliases"] = {user: "MYSELF"}
+    with open(_get_config_file(), "w") as fh:
+        config.write(fh)
+
+    # create default project
+    project = api.create_resource(Resource.PROJECT)
+    alias = "DEFAULT"
+    api.join_project(project, alias)
+
+    config["projects"] = {project: alias}
     with open(_get_config_file(), "w") as fh:
         config.write(fh)

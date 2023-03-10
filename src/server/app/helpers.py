@@ -24,6 +24,7 @@ class TokenTypes(str, enum.Enum):
     OWNER = "O"
     USER = "U"
     JOB = "J"
+    PROJECT = "P"
 
 
 def get_valid_challenges():

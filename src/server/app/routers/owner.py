@@ -159,7 +159,7 @@ class SignKeyRequest(SignedRequest):
 
 
 @app.post(
-    "/sign/key",
+    "/user/sign",
     summary="Adds a new key signature to the database.",
     description="This keeps track of the key signing process to build a full key chain starting from the owners.",
     tags=["authentication"],
@@ -239,4 +239,88 @@ async def user_activate(
     auth.db.users.update_one(
         {"token": body.user_token, "is_owner": False},
         {"$set": {"verify_key": body.verify_key}},
+    )
+
+
+@app.post(
+    "/project/create",
+    summary="Creates a new project.",
+    description="A project is a project that can be joined by many owners to pool their compute resources. Every job needs to be attached to exactly one project. Open for everybody.",
+    tags=["authentication"],
+    responses={
+        200: {"description": "project created."},
+    },
+)
+def project_create():
+    # handle request
+    project_token = helpers.new_token(helpers.TokenTypes.PROJECT)
+    auth.db.projects.insert_one({"token": project_token})
+    return {"project_token": project_token}
+
+
+class ProjectSignatureReason(str, enum.Enum):
+    JOIN_PROJECT = "JOIN_PROJECT"
+
+
+class SignProjectRequest(SignedRequest):
+    owner_token: str = Field(
+        ...,
+        description="Owner token for the user who is joining a project.",
+        regex="^O-[A-Za-z0-9]+$",
+    )
+    reason: ProjectSignatureReason = Field(..., description="Type of signature.")
+    project_token: str = Field(
+        ...,
+        description="Project token.",
+        regex="^P-[A-Za-z0-9]+$",
+    )
+    alias: str = Field(
+        ...,
+        description="""A human-readable alias for the project from the perspective of the owner. 
+        Note that other users can see this name during signature verification or project selection. 
+        For legal reasons, do not include personally identifiable information.""",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "owner_token": "O-3yofQTVDveBf5U8PZf3nay",
+                "project_token": "P-3w8Z4XT73RMYqbJm4fTHJY",
+                "alias": "the next Big Thing",
+                "reason": "JOIN_PROJECT",
+            }
+        }
+
+
+@app.post(
+    "/project/join",
+    summary="Join a project as owner.",
+    description="""A project is used to organize many calculations and track resource usage.
+    Signing a project means that the owner is allowing the project and all its users to submit jobs to be run on the resources of the owner. 
+    Note that signing a project alone is not sufficent for running compute jobs on other owners' resources. 
+    The owner also needs to sign the other owner's key.""",
+    tags=["authentication"],
+    responses={
+        400: {"description": "Validation error."},
+        404: {"description": "No such user."},
+        403: {"description": "Authentication error."},
+        200: {
+            "description": "Signature successfully stored.",
+            "model": EmptyResponse,
+        },
+    },
+)
+async def project_signature_add(
+    body: SignProjectRequest,
+    request: Request,
+    hmq_signature: str = helpers.HMQ_SIGNATURE_HEADER,
+):
+    owner = validators.owner_exists(body)
+    project = validators.project_exists(body)
+    await validators.verify_signed_request(
+        body, request, body.owner_token, hmq_signature
+    )
+
+    auth.db.project_signatures.insert_one(
+        {"action": await request.json(), "signature": hmq_signature}
     )
