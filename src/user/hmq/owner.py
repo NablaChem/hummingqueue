@@ -65,6 +65,7 @@ def owner_init_group():
 class APIRole(str, enum.Enum):
     OWNER = "owner"
     USER = "user"
+    NONE = "none"
 
 
 class API:
@@ -127,8 +128,11 @@ class API:
 
     def _sign(self, payload, role: APIRole):
         message = json.dumps(payload, sort_keys=True).encode("utf8")
-        signed = self._signkeys[role.value].sign(message)
-        return message, base64.b64encode(signed.signature).decode("ascii")
+        signature = None
+        if role is not APIRole.NONE:
+            signed = self._signkeys[role.value].sign(message)
+            signature = base64.b64encode(signed.signature).decode("ascii")
+        return message, signature
 
     def _update_challenge(self):
         if self._challenge is None or self._renew_at < time.time():
@@ -140,16 +144,20 @@ class API:
             self._renew_at = time.time() + response["renew_in"]
 
     def post(self, endpoint: str, payload: dict, role: APIRole):
-        self._update_challenge()
-        payload["challenge"] = self._challenge
-        payload["time"] = int(datetime.now(timezone.utc).timestamp())
+        if role is not APIRole.NONE:
+            self._update_challenge()
+            payload["challenge"] = self._challenge
+            payload["time"] = int(datetime.now(timezone.utc).timestamp())
 
         message, signature = self._sign(payload, role)
+        headers = {}
+        if role is not APIRole.NONE:
+            headers = {"hmq-signature": signature}
 
         request = self._post(
             f"{self._instance}/{endpoint}",
             data=message,
-            headers={"hmq-signature": signature},
+            headers=headers,
         )
         response = request.content
         message = None
@@ -225,10 +233,10 @@ def owner_init(instance, owner):
     }
 
     api = API(instance)
-    response, message, status = api.post("owner/activate", payload)
+    response, message, status = api.post("owner/activate", payload, role=APIRole.OWNER)
     if status != 200:
-        error(f"Unable to upload signing key: {message}")
-    success(f"Signing key set up for {instance}.")
+        error("Unable to upload signing key", error=message)
+    success("Owner signing key set up.", instance=instance)
 
     # submit encryption key
     payload = {
@@ -236,18 +244,18 @@ def owner_init(instance, owner):
         "key": public_key_base64,
         "reason": "ADD_OWN_ENCRYPTION_KEY",
     }
-    response, message, status = api.post("sign/key", payload)
+    response, message, status = api.post("sign/key", payload, role=APIRole.OWNER)
     if status != 200:
-        error(f"Unable to upload encryption key: {message}")
-    success(f"Encryption key set up for {instance}.")
+        error("Unable to upload encryption key.", error=message)
+    success("Owner encryption key set up.", instance=instance)
 
     # create user
     payload = {}
-    response, message, status = api.post("user/create", payload, role=APIRole.USER)
+    response, message, status = api.post("user/create", payload, role=APIRole.NONE)
     user = response["user_token"]
     if status != 200:
-        error(f"Unable to generate own user token: {message}")
-    success(f"Generated new user token for {instance}.", token=user)
+        error("Unable to generate own user token.", error=message)
+    success("Generated new user token.", instance=instance, token=user)
 
     # generate signing key
     signing_key = SigningKey.generate()
@@ -270,11 +278,14 @@ def owner_init(instance, owner):
         config.write(fh)
 
     api = API(instance)
-
+    payload = {
+        "user_token": user,
+        "verify_key": verify_key_base64,
+    }
     response, message, status = api.post("user/activate", payload, role=APIRole.USER)
     if status != 200:
-        error(f"Unable to upload signing key: {message}")
-    success(f"Signing key set up for {instance}.")
+        error("Unable to upload signing key.", error=message)
+    success("Signing key set up.", instance=instance)
 
     # submit encryption key
     payload = {
@@ -284,8 +295,8 @@ def owner_init(instance, owner):
     }
     response, message, status = api.post("sign/key", payload, role=APIRole.USER)
     if status != 200:
-        error(f"Unable to upload encryption key: {message}")
-    success(f"Encryption key set up for {instance}.")
+        error("Unable to upload encryption key.", error=message)
+    success("Encryption key set up.", instance=instance)
 
     # authorize user
     payload = {
@@ -295,5 +306,5 @@ def owner_init(instance, owner):
     }
     response, message, status = api.post("sign/key", payload, role=APIRole.OWNER)
     if status != 200:
-        error(f"Unable to authorize user: {message}")
-    success(f"Created user for {instance}.")
+        error("Unable to authorize user.", error=message)
+    success("Created user.", instance=instance)

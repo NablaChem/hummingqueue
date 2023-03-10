@@ -26,6 +26,15 @@ def owner_exists(body: BaseModel):
     return owner
 
 
+def user_exists(body: BaseModel):
+    """Verifies the user token resolves to a valid user."""
+    user = auth.db.users.find_one({"is_owner": False, "token": body.user_token})
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown user.")
+
+    return user
+
+
 def user_or_owner_exists(body: BaseModel) -> str:
     checked_owner = False
     checked_user = False
@@ -55,6 +64,14 @@ def owner_has_no_key(owner: dict):
     if "verify_key" in owner:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "Owner already has a verify key assigned."
+        )
+
+
+def user_has_no_key(user: dict):
+    """Verifies no verify key is set for that user."""
+    if "verify_key" in user:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "User already has a verify key assigned."
         )
 
 

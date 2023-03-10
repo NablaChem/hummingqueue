@@ -15,6 +15,13 @@ app = APIRouter()
 class AdminAuth(BaseModel):
     admin_token: str = Field(..., description="Installation-specific admin token.")
 
+    class Config:
+        schema_extra = {
+            "example": {
+                "admin_token": "admin",
+            }
+        }
+
 
 class OwnerCreateResponse(BaseModel):
     owner_token: str = Field(..., description="Newly created owner token.")
