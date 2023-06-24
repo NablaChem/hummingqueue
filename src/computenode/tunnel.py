@@ -37,3 +37,28 @@ flags QR RD RA
 def use_tunnel(at: str, baseurl: str):
     over = OverrideResolver({f"api.{baseurl}": at, "redis.{baseurl}": at})
     dns.resolver.override_system_resolver(over)
+
+def generate_traefik_config(from_ip, from_port, to_ip, to_port):
+    return f"""providers:
+  file:
+    filename: traefik.yml
+
+entryPoints:
+  websecure:
+    address: "{from_ip}:{from_port}"
+
+tcp:
+  routers:
+    router4websecure:
+      entryPoints:
+        - websecure
+      service: websecure-forward
+      rule: "HostSNI(`*`)"
+      tls:
+         passthrough: true
+
+  services:
+    websecure-forward:
+      loadBalancer:
+        servers:
+          - address: "{to_ip}:{to_port}""""
