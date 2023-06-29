@@ -17,7 +17,37 @@ services:
   traefik:
     env_file:
       - "./env.prod.SSL.yml"
+    
+    command:
+      # wildcard SSL certificates
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge=true"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.delaybeforecheck=600"
+      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=${ACME_PROVIDER}"
+      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/SSLcertificates/acme.json"
 
+    labels:
+      - "traefik.http.routers.traefiksecure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefiksecure.tls.domains[0].main=*.${BASEURL}"
+
+  minio:
+    volumes:
+      - "prod-minio:/data"
+    labels:
+      - "traefik.http.routers.miniosecure.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.minio-consolesecure.tls.certresolver=letsencrypt"
+
+  hmq:
+    volumes:
+      - "./server/app/:/code/app/"
+    labels:
+      - "traefik.http.routers.hmqsecure.tls.certresolver=letsencrypt"
+  mongo:
+    volumes:
+     - "prod-mongodb:/data/db"
+  
+
+  
 volumes:
   prod-minio:
     external: True

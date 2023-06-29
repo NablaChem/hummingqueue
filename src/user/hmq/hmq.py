@@ -1,7 +1,6 @@
 import click
-import colorama
-
 from . import owner
+
 
 cli = click.CommandCollection(
     sources=[
@@ -10,5 +9,4 @@ cli = click.CommandCollection(
 )
 
 if __name__ == "__main__":
-    colorama.init()
     cli()

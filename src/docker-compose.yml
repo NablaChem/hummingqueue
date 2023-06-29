@@ -9,13 +9,6 @@ services:
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
 
-      # wildcard SSL certificates
-      - "--certificatesresolvers.letsencrypt.acme.dnschallenge=true"
-      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.delaybeforecheck=600"
-      - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=${ACME_PROVIDER}"
-      - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
-      - "--certificatesresolvers.letsencrypt.acme.storage=/SSLcertificates/acme.json"
-
       # EntryPoints
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
@@ -43,8 +36,6 @@ services:
       - "traefik.http.routers.traefiksecure.entrypoints=websecure"
       - "traefik.http.routers.traefiksecure.rule=Host(`traefik.${BASEURL}`)"
       - "traefik.http.routers.traefiksecure.tls=true"
-      - "traefik.http.routers.traefiksecure.tls.certresolver=letsencrypt"
-      - "traefik.http.routers.traefiksecure.tls.domains[0].main=*.${BASEURL}"
       - "traefik.http.routers.traefiksecure.service=api@internal"
       - "traefik.http.routers.traefiksecure.middlewares=auth"
 
@@ -103,11 +94,8 @@ services:
       - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
 
       # HTTPS
-      - "traefik.http.routers.miniosecure.tls=true"
-      - "traefik.http.routers.miniosecure.tls.certresolver=letsencrypt"
       - "traefik.http.routers.minio-consolesecure.tls=true"
-      - "traefik.http.routers.minio-consolesecure.tls.certresolver=letsencrypt"
-
+      - "traefik.http.routers.miniosecure.tls=true"
   hmq:
     build:
       context: "server"
@@ -128,10 +116,10 @@ services:
       - "traefik.http.middlewares.upgradeHTTP.redirectscheme.scheme=https"
       - "traefik.http.middlewares.upgradeHTTP.redirectscheme.permanent=true"
       - "traefik.http.routers.hmq.middlewares=upgradeHTTP"
-
+      
       # HTTPS
       - "traefik.http.routers.hmqsecure.tls=true"
-      - "traefik.http.routers.hmqsecure.tls.certresolver=letsencrypt"
+      
     environment:
       - "MONGODB_CONNSTR=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo/hq"
       - "API_SALT=${API_SALT}"
