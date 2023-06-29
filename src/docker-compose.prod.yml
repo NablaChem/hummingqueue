@@ -10,6 +10,9 @@ services:
   minio:
     volumes:
       - "prod-minio:/data"
+  redis:
+    volumes:
+      - "prod-redis:/data"
 
   traefik:
     env_file:
@@ -19,4 +22,6 @@ volumes:
   prod-minio:
     external: True
   prod-mongodb:
+    external: True
+  prod-redis:
     external: True
