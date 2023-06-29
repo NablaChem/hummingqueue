@@ -41,6 +41,19 @@ services:
 
       # Authentication
       - "traefik.http.middlewares.auth.basicauth.users=admin:${TRAEFIK_ADMIN_PASS}"
+  redis:
+    image: "redis:latest"
+    restart: "unless-stopped"
+    environment:
+      - "ALLOW_EMPTY_PASSWORD=yes"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.tcp.routers.redis.service=redis"
+      - "traefik.tcp.routers.redis.rule=HostSNI(`redis.${BASEURL}`)"
+      - "traefik.tcp.routers.redis.tls=true"
+      - "traefik.tcp.routers.redis.tls.certresolver=lets-encrypt"
+      - "traefik.tcp.services.redis.loadbalancer.server.port=6379"
+      - "traefik.tcp.routers.redis.entrypoints=websecure"
 
   mongo:
     image: "mongo:5.0"

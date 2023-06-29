@@ -5,6 +5,7 @@ devserver:
 prodserver:
 	docker volume create prod-mongodb
 	docker volume create prod-minio
+	docker volume create prod-redis
 	docker-compose -f docker-compose.yml -f docker-compose.prod.yml -p prod --env-file env.prod.yml up --build -d
 testserver:
 	docker exec dev_api_1 pytest --cov=./

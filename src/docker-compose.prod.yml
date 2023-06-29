@@ -1,6 +1,19 @@
 version: "3.3"
 
 services:
+  hmq:
+    volumes:
+      - "./server/app/:/code/app/"
+  mongo:
+    volumes:
+     - "prod-mongodb:/data/db"
+  minio:
+    volumes:
+      - "prod-minio:/data"
+  redis:
+    volumes:
+      - "prod-redis:/data"
+
   traefik:
     env_file:
       - "./env.prod.SSL.yml"
@@ -39,4 +52,6 @@ volumes:
   prod-minio:
     external: True
   prod-mongodb:
+    external: True
+  prod-redis:
     external: True
