@@ -1,9 +1,9 @@
 import os
 import pymongo
+from nacl.secret import SecretBox
+import base64
 
 mongo_connstr, mongo_db = os.getenv("MONGODB_CONNSTR").rsplit("/", 1)
-db = pymongo.MongoClient(mongo_connstr)[mongo_db]
-salt = os.getenv("API_SALT")
-admin_token = os.getenv("API_ADMINTOKEN")
-CHALLENGE_PERIOD_LENGTH_SECONDS = 3600
-MAXIMUM_REQUEST_AGE_SECONDS = 30
+client = pymongo.MongoClient(mongo_connstr)
+db = client[mongo_db]
+encryption_key = SecretBox(base64.b64decode(os.getenv("API_TOKEN")))
