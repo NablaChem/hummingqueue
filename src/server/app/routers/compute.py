@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
-import hashlib
+import rq
 import base64
 import time
 import uuid
@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from .. import helpers
 from .. import auth
+from .. import maintenance
 
 app = APIRouter()
 
@@ -69,8 +70,8 @@ class TaskSubmit(BaseModel):
     digest: str = Field(..., description="SHA256 digest of calls")
 
 
-@app.post("/task/submit", tags=["compute"])
-def task_submit(body: TaskSubmit):
+@app.post("/tasks/submit", tags=["compute"])
+def tasks_submit(body: TaskSubmit):
     verify_challenge(body.challenge)
     # todo: verify digest
 
@@ -100,67 +101,108 @@ def task_submit(body: TaskSubmit):
     return uuids
 
 
-class TaskFetch(BaseModel):
-    count: int = Field(..., description="Number of tasks to fetch")
+class TasksDelete(BaseModel):
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    delete: List[str] = Field(..., description="List of task ids to cancel and delete.")
 
 
-# @app.post("/task/fetch", tags=["compute"])
-# def task_fetch(body: TaskFetch):
-#     verify_challenge(body.challenge)
+@app.post("/tasks/delete", tags=["compute"])
+def tasks_delete(body: TasksDelete):
+    verify_challenge(body.challenge)
 
-#     tasks = []
-#     logentries = []
-#     for i in range(body.count):
-#         task = auth.db.tasks.find_one_and_update(
-#             {"status": "pending"},
-#             {"$set": {"status": "queued"}},
-#             return_document=True,
-#         )
-#         if task is None:
-#             break
-#         tasks.append(
-#             {"call": task["call"], "function": task["function"], "id": task["id"]}
-#         )
-#         logentries.append({"event": "task/fetch", "id": task["id"], "ts": time.time()})
+    # mongodb
+    logentries = []
+    existing = auth.db.tasks.find({"id": {"$in": body.delete}})
+    for task in existing:
+        logentries.append({"event": "task/delete", "id": task["id"], "ts": time.time()})
+    existing_ids = [_["id"] for _ in existing]
+    auth.db.tasks.delete_many({"id": {"$in": existing_ids}})
+    if len(logentries) > 0:
+        auth.db.logs.insert_many(logentries)
 
-#     if len(logentries) > 0:
-#         auth.db.logs.insert_many(logentries)
-#     return tasks
+    # rq
+    for rqid in maintenance.redis_conn.hmget("id2id", existing_ids):
+        if rqid is None:
+            continue
+
+        job = rq.job.Job.fetch(rqid, connection=maintenance.redis_conn)
+        job.cancel()
+        job.delete()
+    maintenance.redis_conn.hdel("id2id", existing_ids)
+
+    return existing_ids
+
+
+class TasksInspect(BaseModel):
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    tasks: List[str] = Field(
+        ..., description="List of task ids of which to query the status."
+    )
+
+
+@app.post("/tasks/inspect", tags=["compute"])
+def task_inspect(body: TasksInspect):
+    verify_challenge(body.challenge)
+
+    result = {_: None for _ in body.tasks}
+    for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
+        result[task["id"]] = task["status"]
+
+    return result
 
 
 class TaskResult(BaseModel):
-    id: str = Field(..., description="Task ID")
+    task: str = Field(..., description="Task ID")
     result: str = Field(description="Base64-encoded and encrypted result", default=None)
     error: str = Field(
         description="Base64-encoded and encrypted error message", default=None
     )
     duration: float = Field(..., description="Duration of task execution")
+
+
+class ResultsStore(BaseModel):
+    results: List[TaskResult] = Field(..., description="List of results to store")
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
 
 
-@app.post("/task/result", tags=["compute"])
-def task_result(body: TaskResult):
+@app.post("/results/store", tags=["compute"])
+def results_store(body: ResultsStore):
     verify_challenge(body.challenge)
 
-    is_error = False
-    if body.error is not None:
-        is_error = True
+    for result in body.results:
+        is_error = False
+        if result.error is not None:
+            is_error = True
 
-    if is_error:
-        status = "error"
-    else:
-        status = "completed"
+        if is_error:
+            status = "error"
+        else:
+            status = "completed"
 
-    update = {
-        "status": status,
-        "result": body.result,
-        "error": body.error,
-        "duration": body.duration,
-    }
-    auth.db.tasks.update_one({"id": body.id}, {"$set": update})
+        update = {
+            "status": status,
+            "result": result.result,
+            "error": result.error,
+            "duration": result.duration,
+        }
+        auth.db.tasks.update_one({"id": result.task}, {"$set": update})
 
 
-# task is getting old on compute node
-# @app.post("/task/return", tags=["compute"])
-# def task_resturn
+class ResultsRetrieve(BaseModel):
+    tasks: List[str] = Field(..., description="Task IDs")
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+
+
+@app.post("/results/retrieve", tags=["compute"])
+def results_retreive(body: ResultsRetrieve):
+    verify_challenge(body.challenge)
+
+    results = {_: None for _ in body.tasks}
+    for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
+        entry = {"status": None, "result": None, "error": None, "duration": None}
+        for key in entry.keys():
+            if key in entry:
+                entry[key] = task[key]
+        results[task["id"]] = entry
+
+    return results

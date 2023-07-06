@@ -24,8 +24,11 @@ def refill_redis(njobs: int):
         logentries.append({"event": "task/fetch", "id": task["id"], "ts": time.time()})
     if len(logentries) > 0:
         auth.db.logs.insert_many(logentries)
+        idmapping = {}
         for task in tasks:
-            q.enqueue("hmq.unwrap", **task)
+            job = q.enqueue("hmq.unwrap", **task)
+            idmapping[task["hmqid"]] = job.id
+        redis_conn.hset("id2id", mapping=idmapping)
 
 
 def flow_control():

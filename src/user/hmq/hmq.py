@@ -122,7 +122,7 @@ class API:
             "digest": calldigest,
             "challenge": self._encrypt(str(time.time()), raw=True),
         }
-        uuids = self._post("/task/submit", payload)
+        uuids = self._post("/tasks/submit", payload)
         return uuids
 
     def warm_cache(self, function: str):
@@ -166,57 +166,26 @@ class API:
 
         overall_end = time.time()
         payload = {
-            "id": hmqid,
+            "task": hmqid,
             "duration": endtime - starttime,
             "walltime": overall_end - overall_start,
-            "challenge": get_challenge(box),
         }
+
         if errormsg is not None:
             payload["error"] = errormsg
         else:
             payload["result"] = result
+        payload = {"results": [payload], "challenge": get_challenge(box)}
 
+        print(payload)
         res = requests.post(
-            f"{baseurl}/task/result",
+            f"{baseurl}/results/store",
             json=payload,
             verify=verify,
         )
 
     def _get_challenge(self):
         return str(time.time())
-
-    def _upload_results(self, jobid):
-        self._jobs = [_ for _ in self._jobs if _.jobid != jobid]
-
-    def fetch_new_tasks(self):
-        payload = {
-            "challenge": self._encrypt(self._get_challenge(), raw=True),
-            "count": 1000,
-        }
-        try:
-            tasks = self._post(f"/task/fetch", payload)
-            for task in tasks:
-                self._queue.put(task)
-        except:
-            time.sleep(2)
-
-    def worker(self):
-        self._build_box()
-
-        self._queue = mp.Queue()
-
-        self._pool = mp.Pool(
-            mp.cpu_count(),
-            API._worker,
-            (self._queue, self._box._key, self._url, self._verify),
-        )
-
-        while True:
-            while True:
-                if self._queue.qsize() < 20:
-                    break
-                time.sleep(2)
-            self.fetch_new_tasks()
 
 
 api = API()
@@ -264,10 +233,20 @@ class Tag:
 
     def wait(self, keep=False):
         """Waits for all tasks in a tag and deletes them from the queue unless keep is specified."""
+        missing = [
+            _ for _ in self.tasks if _ not in self._results and _ not in self._errors
+        ]
+
         while len(self.tasks) > len(self._results) + len(self._errors):
             time.sleep(1)
+
             # retrieve all
-            ...
+            payload = {
+                "challenge": self._encrypt(self._get_challenge(), raw=True),
+                "count": 1000,
+            }
+        # try:
+        #    tasks = self._post(f"/task/fetch", payload)
 
     def retrieve(self):
         ...
