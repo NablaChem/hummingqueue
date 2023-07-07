@@ -199,10 +199,13 @@ def results_retreive(body: ResultsRetrieve):
 
     results = {_: None for _ in body.tasks}
     for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
-        entry = {"status": None, "result": None, "error": None, "duration": None}
+        entry = {"result": None, "error": None}
+        has_info = False
         for key in entry.keys():
-            if key in entry:
+            if key in task:
                 entry[key] = task[key]
-        results[task["id"]] = entry
+                has_info = True
+        if has_info:
+            results[task["id"]] = entry
 
     return results
