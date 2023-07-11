@@ -15,6 +15,7 @@ services:
 
       # API
       - "--api=true"
+      - "--log.level=DEBUG"
     ports:
       - "80:80"
       - "443:443"
@@ -64,41 +65,42 @@ services:
      - "MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}"
      - "MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASS}"
 
-  minio:
-    image: "minio/minio:RELEASE.2022-01-08T03-11-54Z"
-    restart: "unless-stopped"
-    command: "server /data --console-address :9001 --address :9000"
-    expose:
-      - 9000
-      - 9001
-    environment:
-      - "MINIO_ROOT_USER=${MINIO_ROOT_USER}"
-      - "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASS}"
-      - "MINIO_BROWSER_REDIRECT_URL=http://s3console.${BASEURL}"
-      - "MINIO_DOMAIN=http://s3.${BASEURL}"
-    labels:
-      # general
-      - "traefik.enable=true"
-      - "traefik.docker.network=traefik"
+  # minio:
+  #   image: "minio/minio:RELEASE.2022-01-08T03-11-54Z"
+  #   restart: "unless-stopped"
+  #   command: "server /data --console-address :9001 --address :9000"
+  #   expose:
+  #     - 9000
+  #     - 9001
+  #   environment:
+  #     - "MINIO_ROOT_USER=${MINIO_ROOT_USER}"
+  #     - "MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASS}"
+  #     - "MINIO_BROWSER_REDIRECT_URL=http://s3console.${BASEURL}"
+  #     - "MINIO_DOMAIN=http://s3.${BASEURL}"
+  #   labels:
+  #     # general
+  #     - "traefik.enable=true"
+  #     - "traefik.docker.network=traefik"
 
-      # MinIO
-      - "traefik.http.routers.miniosecure.entrypoints=websecure"  
-      - "traefik.http.routers.miniosecure.service=minio"
-      - "traefik.http.routers.miniosecure.rule=Host(`s3.${BASEURL}`)"
-      - "traefik.http.services.minio.loadbalancer.server.port=9000"
+  #     # MinIO
+  #     - "traefik.http.routers.miniosecure.entrypoints=websecure"  
+  #     - "traefik.http.routers.miniosecure.service=minio"
+  #     - "traefik.http.routers.miniosecure.rule=Host(`s3.${BASEURL}`)"
+  #     - "traefik.http.services.minio.loadbalancer.server.port=9000"
 
-      # MinIO console
-      - "traefik.http.routers.minio-consolesecure.entrypoints=websecure"  
-      - "traefik.http.routers.minio-consolesecure.service=minio-console"
-      - "traefik.http.routers.minio-consolesecure.rule=Host(`s3console.${BASEURL}`)"
-      - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
+  #     # MinIO console
+  #     - "traefik.http.routers.minio-consolesecure.entrypoints=websecure"  
+  #     - "traefik.http.routers.minio-consolesecure.service=minio-console"
+  #     - "traefik.http.routers.minio-consolesecure.rule=Host(`s3console.${BASEURL}`)"
+  #     - "traefik.http.services.minio-console.loadbalancer.server.port=9001"
 
-      # HTTPS
-      - "traefik.http.routers.minio-consolesecure.tls=true"
-      - "traefik.http.routers.miniosecure.tls=true"
+  #     # HTTPS
+  #     - "traefik.http.routers.minio-consolesecure.tls=true"
+  #     - "traefik.http.routers.miniosecure.tls=true"
   hmq:
     build:
       context: "server"
+    restart: "unless-stopped"
     ports:
       - "80"
     labels:
@@ -124,3 +126,29 @@ services:
       - "MONGODB_CONNSTR=mongodb://${MONGO_USER}:${MONGO_PASS}@mongo/hq"
       - "API_TOKEN=${API_TOKEN}"
 
+  dash:
+    build:
+      context: "dashboard"
+    restart: "unless-stopped"
+    ports:
+      - "80"
+    labels:
+      # genereal
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+
+      # Dashboard
+      - "traefik.http.routers.dashsecure.rule=Host(`queue.${BASEURL}`)"
+      - "traefik.http.routers.dashsecure.entrypoints=websecure"
+        # - "traefik.http.routers.dashsecure.loadbalancer.server.port=8501"
+
+      # HTTP 
+      - "traefik.http.routers.dash.entrypoints=web"
+      - "traefik.http.routers.dash.rule=Host(`queue.${BASEURL}`)"
+      - "traefik.http.middlewares.upgradeHTTP.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.upgradeHTTP.redirectscheme.permanent=true"
+      - "traefik.http.routers.dash.middlewares=upgradeHTTP"
+      
+      # HTTPS
+      - "traefik.http.routers.dashsecure.tls=true"
+      

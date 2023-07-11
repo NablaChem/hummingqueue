@@ -4,15 +4,15 @@ services:
   hmq:
     volumes:
       - "./server/app/:/code/app/"
-  minio:
-    volumes:
-      - "dev-minio:/data"
+  # minio:
+  #   volumes:
+  #     - "dev-minio:/data"
   mongo:
     volumes:
      - "dev-mongodb:/data/db"
 
 volumes:
-  dev-minio:
-    external: True
+  # dev-minio:
+  #   external: True
   dev-mongodb:
     external: True

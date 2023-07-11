@@ -209,3 +209,15 @@ def results_retreive(body: ResultsRetrieve):
             results[task["id"]] = entry
 
     return results
+
+
+@app.get("/usage/inspect", tags=["statistics"])
+def inspect_usage():
+    ret = {}
+    unixminute_now = int(time.time() / 60)
+    unixminute_first = unixminute_now - 60
+    for stats in auth.db.stats.find({"ts": {"$gte": unixminute_first}}):
+        refts = stats["ts"]
+        stats = {k: v for k, v in stats.items() if k != "_id" and k != "ts"}
+        ret[unixminute_now - refts] = stats
+    return ret
