@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 
+st.set_page_config(page_title="Hummingqueue Dashboard", layout="wide")
 
 st.title("Hummingqueue Dashboard")
 col1, col2 = st.columns(2)
@@ -11,7 +12,7 @@ result = requests.get("http://hmq/usage/inspect")
 
 rows = []
 for minutes_ago, data in result.json().items():
-    data["age"] = minutes_ago
+    data["age"] = int(minutes_ago)
     rows.append(data)
 df = pd.DataFrame(rows)
 df = df.sort_values("age")
