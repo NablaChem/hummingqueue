@@ -441,6 +441,7 @@ flags QR RD RA
 
 def use_tunnel(at: str, baseurl: str):
     over = OverrideResolver({f"hmq.{baseurl}": at, f"redis.{baseurl}": at})
+    over.reset()
     dns.resolver.override_system_resolver(over)
 
 

@@ -33,15 +33,14 @@ cleanup() {
 trap cleanup 15
 
 # run in local tmpdir
-for INSTANCE in $$(seq $$SLURM_JOB_CPUS_PER_NODE);
+for INSTANCE in $$( seq $$(( $$SLURM_JOB_CPUS_PER_NODE/${ncores} )) );
 do
 	TMPDIR="/local/workdir-$$SLURM_JOB_ID-$$INSTANCE"
 	mkdir $$TMPDIR
-	cp -r $$SLURM_SUBMIT_DIR/local/* $$TMPDIR/
 	cd $$TMPDIR
 	export PYSCF_TMPDIR=$$TMPDIR
 	cat << EOF > config.py
-	import hmq
+import hmq
 hmq.use_tunnel("${gateway}", "${baseurl}")
 REDIS_HOST = 'redis.${baseurl}'
 REDIS_PORT = '${gatewayport}'
