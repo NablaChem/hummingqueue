@@ -119,6 +119,7 @@ class API:
             "digest": digest,
             "major": sys.version_info.major,
             "minor": sys.version_info.minor,
+            "packages": [self._encrypt(_) for _ in remote_function["packages"]],
             "challenge": self._encrypt(str(time.time()), raw=True),
         }
         result = self._post("/function/register", payload)
@@ -173,14 +174,11 @@ class API:
         if function in functions:
             return
 
-        remote_function = self._box.decrypt(
-            base64.b64decode(
-                self._get(f"/function/fetch/{function}").json()["function"]
-            )
-        )
+        payload = self._get(f"/function/fetch/{function}").json()
+        remote_function = self._box.decrypt(base64.b64decode(payload["function"]))
+        packages = [self._box.decrypt(base64.b64decode(_)) for _ in payload["packages"]]
         remote_function = json.loads(remote_function)
         callable = base64.b64decode(remote_function["callable"])
-        packages = remote_function["packages"]
         for package in packages:
             # system call to install via pip
             subprocess.run(
@@ -369,14 +367,9 @@ def task(func):
         # register function with server
         callable = cloudpickle.dumps(func)
 
-        requirements = {
-            "python.major": sys.version_info.major,
-            "python.minor": sys.version_info.minor,
-            "packages": packages,
-        }
         remote_function = {
             "callable": callable,
-            "requirements": requirements,
+            "packages": packages,
         }
 
         digest = hashlib.sha256(callable).hexdigest()
@@ -414,7 +407,7 @@ class CachedWorker(Worker):
         return ret
 
 
-class OverrideResolver:
+class OverrideResolver(dns.resolver.Resolver):
     def __init__(self, overrides):
         self._overrides = overrides
 
@@ -447,7 +440,7 @@ flags QR RD RA
 
 
 def use_tunnel(at: str, baseurl: str):
-    over = OverrideResolver({f"api.{baseurl}": at, f"redis.{baseurl}": at})
+    over = OverrideResolver({f"hmq.{baseurl}": at, f"redis.{baseurl}": at})
     dns.resolver.override_system_resolver(over)
 
 
@@ -474,4 +467,4 @@ tcp:
     websecure-forward:
       loadBalancer:
         servers:
-          - address: "{to_ip}:{to_port}"""
+          - address: "{to_ip}:{to_port}" """

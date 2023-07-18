@@ -36,6 +36,9 @@ class FunctionRegister(BaseModel):
     major: int = Field(..., description="Major version number")
     minor: int = Field(..., description="Minor version number")
     digest: str = Field(..., description="SHA256 digest of function")
+    packages: List[str] = Field(
+        ..., description="List of encrypted packages to install"
+    )
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
 
 
@@ -53,6 +56,7 @@ def task_register(body: FunctionRegister):
                 "function": body.function,
                 "major": body.major,
                 "minor": body.minor,
+                "packages": body.packages,
             }
         )
         auth.db.logs.insert_one(
@@ -68,7 +72,7 @@ def task_register(body: FunctionRegister):
 def function_fetch(digest: str):
     code = auth.db.functions.find_one({"digest": digest})
     if code:
-        return {"function": code["function"]}
+        return {"function": code["function"], "packages": code["packages"]}
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invalid digest")
 
 
