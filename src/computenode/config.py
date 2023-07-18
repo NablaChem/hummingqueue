@@ -1,5 +1,5 @@
 import hmq
-REDIS_HOST = 'redis.localhost.nablachem.org'
+REDIS_HOST = 'redis.nablachem.org'
 REDIS_PORT = '443'
 REDIS_SSL = True             # Default: False
 REDIS_SSL_CA_CERTS = None    # Default: None

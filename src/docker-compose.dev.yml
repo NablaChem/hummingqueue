@@ -7,6 +7,26 @@ services:
   # minio:
   #   volumes:
   #     - "dev-minio:/data"
+  traefik:
+
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+
+      # EntryPoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+
+      # API
+      - "--api=true"
+      - "--log.level=DEBUG"
+      # wildcard SSL certificates
+      - "--accesslog=true"
+      - "--log.level=debug"
+      - "--api.insecure=true"
+      - "--api.debug=true"
+      - "--providers.docker=true"
+
   mongo:
     volumes:
      - "dev-mongodb:/data/db"

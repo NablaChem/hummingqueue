@@ -1,0 +1,7 @@
+dnspython
+requests
+cloudpickle
+pynacl
+tqdm
+rq
+toml

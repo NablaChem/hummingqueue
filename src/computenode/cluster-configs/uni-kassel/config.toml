@@ -1,0 +1,13 @@
+[server]
+baseurl = "nablachem.org"
+redis_db = 1
+
+[gateway]
+address = "141.51.204.30"
+port = 42424
+
+[datacenter]
+name = "Kassel"
+envs = "/home/users/0026/uk092940/hmq_prod/envs"
+binaries = "/home/users/0026/uk092940/hmq_prod/bin"
+

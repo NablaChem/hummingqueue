@@ -27,9 +27,9 @@ routes = ["compute", "communication", "security"]
 for route in routes:
     module = __import__(f"app.routers.{route}", fromlist=["app"])
 
-    for objname, obj in inspect.getmembers(module, inspect.isclass):
-        if issubclass(obj, BaseModel):
-            helpers.build_schema_example(obj)
+    # for objname, obj in inspect.getmembers(module, inspect.isclass):
+    #    if issubclass(obj, BaseModel):
+    #        helpers.build_schema_example(obj)
 
     app.include_router(module.app)
 

@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 import rq
+import re
 import base64
 import time
 import uuid
@@ -32,6 +33,8 @@ def verify_challenge(encrypted_challenge):
 
 class FunctionRegister(BaseModel):
     function: str = Field(..., description="Base64-encoded and encrypted function")
+    major: int = Field(..., description="Major version number")
+    minor: int = Field(..., description="Minor version number")
     digest: str = Field(..., description="SHA256 digest of function")
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
 
@@ -44,7 +47,14 @@ def task_register(body: FunctionRegister):
     verify_challenge(body.challenge)
 
     if not auth.db.functions.find_one({"digest": body.digest}):
-        auth.db.functions.insert_one({"digest": body.digest, "function": body.function})
+        auth.db.functions.insert_one(
+            {
+                "digest": body.digest,
+                "function": body.function,
+                "major": body.major,
+                "minor": body.minor,
+            }
+        )
         auth.db.logs.insert_one(
             {"event": "function/register", "id": body.digest, "ts": time.time()}
         )
@@ -66,6 +76,8 @@ class TaskSubmit(BaseModel):
     tag: str = Field(..., description="Tag for the task")
     function: str = Field(..., description="SHA256 digest of function")
     calls: str = Field(..., description="JSON-encoded list of calls")
+    ncores: int = Field(..., description="Number of cores to use")
+    datacenters: List[str] = Field(..., description="Acceptable datacenters")
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
     digest: str = Field(..., description="SHA256 digest of calls")
 
@@ -79,6 +91,20 @@ def tasks_submit(body: TaskSubmit):
     uuids = []
     logentries = []
     taskentries = []
+
+    function = auth.db.functions.find_one({"digest": body.function})
+    queues = [
+        f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-{_}'
+        for _ in body.datacenters
+    ]
+    if queues == []:
+        queues = [f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-any']
+
+    for queue in queues:
+        auth.db.active_queues.update_one(
+            {"queue": queue}, {"$inc": {"submits": 1}}, upsert=True
+        )
+
     for call in calls:
         taskid = str(uuid.uuid4())
         logentries.append({"event": "task/submit", "id": taskid, "ts": time.time()})
@@ -88,6 +114,9 @@ def tasks_submit(body: TaskSubmit):
                 "call": call,
                 "tag": body.tag,
                 "function": body.function,
+                "ncores": body.ncores,
+                "datacenters": body.datacenters,
+                "queues": queues,
                 "status": "pending",
             }
         )
@@ -211,7 +240,7 @@ def results_retreive(body: ResultsRetrieve):
     return results
 
 
-@app.get("/usage/inspect", tags=["statistics"])
+@app.get("/queue/inspect", tags=["statistics"])
 def inspect_usage():
     ret = {}
     unixminute_now = int(time.time() / 60)
@@ -221,3 +250,46 @@ def inspect_usage():
         stats = {k: v for k, v in stats.items() if k != "_id" and k != "ts"}
         ret[unixminute_now - refts] = stats
     return ret
+
+
+class QueueHasWork(BaseModel):
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    datacenter: str = Field(..., description="Datacenter checking in.")
+
+
+@app.post("/queue/haswork", tags=["statistics"])
+def task_inspect(body: QueueHasWork):
+    verify_challenge(body.challenge)
+
+    # update heartbeat
+    auth.db.heartbeat.update_one(
+        {"datacenter": body.datacenter}, {"$set": {"ts": time.time()}}, upsert=True
+    )
+
+    # check if there is work
+    qs = rq.Queue.all(connection=auth.redis)
+    regex = r"py-(?P<pythonversion>.+),nc-(?P<numcores>.+),dc-(?P<datacenter>.+)"
+
+    queues = []
+    for queue in qs:
+        m = re.match(regex, queue.name)
+        if m is None:
+            continue
+        if m.group("datacenter") != body.datacenter and m.group("datacenter") != "any":
+            continue
+
+        if queue.count > 0:
+            queues.append(
+                {
+                    "version": m.group("pythonversion"),
+                    "numcores": m.group("numcores"),
+                    "name": queue.name,
+                }
+            )
+
+    return queues
+
+
+@app.get("/system/status", tags=["statistics"])
+def task_inspect():
+    return "ok"

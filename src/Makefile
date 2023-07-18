@@ -17,3 +17,5 @@ runuser:
 	docker run -t --network="host" --rm -w="/root" -v "$(shell pwd)/.devhome:/root/" dev-user hmq $(ARGS)
 worker:
 	cd computenode; PYTHONPATH="../user:${PYTHONPATH}" rq worker -c config -w worker.CachedWorker --max-idle-time 60 --quiet --burst
+director:
+	cd computenode; PYTHONPATH="../user:${PYTHONPATH}" python director.py cluster-configs/localhost

@@ -15,13 +15,13 @@ result = requests.get("http://hmq/usage/inspect")
 
 rows = []
 for minutes_ago, data in result.json().items():
-    data["age"] = int(minutes_ago)
+    data["age"] = -int(minutes_ago)
     rows.append(data)
 df = pd.DataFrame(rows)
 df = df.sort_values("age", ascending=False)
 col1.caption("Compute resources")
 col1.line_chart(df, x="age", y=["cores_available", "cores_used"])
-col1.caption("Queue depth")
+col2.caption("Queue depth")
 col2.line_chart(df, x="age", y=["tasks_queued"])
 col2.line_chart(df, x="age", y=["tasks_running"])
 # col2.caption("Tags")

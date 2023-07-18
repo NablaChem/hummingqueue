@@ -1,10 +1,12 @@
 # %%
+import dns.resolver
+import dns.message
 import uuid
 import sys
 import traceback
+import subprocess
 import time
 import requests
-import multiprocessing as mp
 import base64
 import socket
 import urllib3
@@ -14,6 +16,8 @@ import hashlib
 import configparser
 from pathlib import Path
 from nacl.secret import SecretBox
+import tqdm
+from rq import Worker
 
 functions = {}
 
@@ -40,7 +44,7 @@ class API:
 
         # resolve DNS
         try:
-            socket.gethostbyname(instance)
+            socket.gethostbyname(instance.split(":")[0])
         except socket.gaierror:
             raise ValueError("Cannot resolve instance URL.")
 
@@ -92,9 +96,12 @@ class API:
         return message
 
     def _post(self, endpoint, payload):
+        self._build_box()
         response = requests.post(
             self._url + endpoint, json=payload, verify=self._verify
         )
+        if response.status_code in (404, 422):
+            raise ValueError("Unable to post request.")
         return response.json()
 
     def _get(self, endpoint, baseurl=None):
@@ -110,6 +117,8 @@ class API:
         payload = {
             "function": self._encrypt(remote_function),
             "digest": digest,
+            "major": sys.version_info.major,
+            "minor": sys.version_info.minor,
             "challenge": self._encrypt(str(time.time()), raw=True),
         }
         result = self._post("/function/register", payload)
@@ -136,7 +145,14 @@ class API:
             results[task] = result
         return results
 
-    def submit_tasks(self, tag: str, digest: str, calls: list):
+    def submit_tasks(
+        self,
+        tag: str,
+        digest: str,
+        calls: list,
+        ncores: int = 1,
+        datacenters: list = None,
+    ):
         calls = [self._encrypt(call) for call in calls]
         callstr = json.dumps(calls)
         calldigest = hashlib.sha256(callstr.encode("utf8")).hexdigest()
@@ -145,6 +161,8 @@ class API:
             "function": digest,
             "calls": callstr,
             "digest": calldigest,
+            "ncores": ncores,
+            "datacenters": datacenters,
             "challenge": self._encrypt(str(time.time()), raw=True),
         }
         uuids = self._post("/tasks/submit", payload)
@@ -162,7 +180,22 @@ class API:
         )
         remote_function = json.loads(remote_function)
         callable = base64.b64decode(remote_function["callable"])
+        packages = remote_function["packages"]
+        for package in packages:
+            # system call to install via pip
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", package],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         functions[function] = cloudpickle.loads(callable)
+
+    def has_jobs(self, datacenter):
+        payload = {
+            "datacenter": datacenter,
+            "challenge": self._encrypt(str(time.time()), raw=True),
+        }
+        return self._post("/queue/haswork", payload)
 
     @staticmethod
     def _worker(hmqid, call, function, secret, baseurl, verify):
@@ -291,7 +324,7 @@ class Tag:
         remaining = len(self.tasks) - len(self._results) - len(self._errors)
         while remaining > 0:
             tasklist = []
-            for task in self.tasks:
+            for task in tqdm.tqdm(self.tasks):
                 if task not in self._results and task not in self._errors:
                     tasklist.append(task)
                 if len(tasklist) > 50:
@@ -332,13 +365,14 @@ def task(func):
     def wrapper(*args, **kwargs):
         func._calls.append((args, kwargs))
 
-    def submit(tag=None):
+    def submit(tag=None, ncores=1, datacenters: str = None, packages=[]):
         # register function with server
         callable = cloudpickle.dumps(func)
 
         requirements = {
             "python.major": sys.version_info.major,
             "python.minor": sys.version_info.minor,
+            "packages": packages,
         }
         remote_function = {
             "callable": callable,
@@ -351,7 +385,13 @@ def task(func):
 
         # send calls to server
         tag = Tag(func.__name__)
-        tag._add_uuids(api.submit_tasks(tag.name, digest, func._calls))
+        if datacenters is None:
+            datacenters = []
+        else:
+            datacenters = [dc.strip() for dc in datacenters.split(",")]
+        tag._add_uuids(
+            api.submit_tasks(tag.name, digest, func._calls, ncores, datacenters)
+        )
         func._calls = []
         return tag
 
@@ -364,3 +404,74 @@ def task(func):
 def unwrap(hmqid: str, call: str, function: str):
     api._build_box()
     api._worker(hmqid, call, function, api._box._key, api._url, api._verify)
+
+
+class CachedWorker(Worker):
+    def execute_job(self, job, queue):
+        api.warm_cache(job.kwargs["function"])
+        ret = super().execute_job(job, queue)
+        self.connection.hdel("id2id", job.kwargs["hmqid"])
+        return ret
+
+
+class OverrideResolver:
+    def __init__(self, overrides):
+        self._overrides = overrides
+
+    def _build_message(self, qname):
+        return dns.message.from_text(
+            f"""id 12345
+opcode QUERY
+rcode NOERROR
+flags QR RD RA
+;QUESTION
+{qname}. IN A
+;ANSWER
+{qname}. 37478 IN A {self._overrides[qname]}"""
+        )
+
+    def resolve(self, *args, **kwargs):
+        if "qname" in kwargs:
+            qname = kwargs["qname"]
+        else:
+            qname = args[0]
+        if qname in self._overrides:
+            return dns.resolver.Answer(
+                qname,
+                dns.rdatatype.RdataType.A,
+                dns.rdataclass.RdataClass.IN,
+                self._build_message(qname),
+            )
+        else:
+            return dns.resolver.resolve(qname)
+
+
+def use_tunnel(at: str, baseurl: str):
+    over = OverrideResolver({f"api.{baseurl}": at, f"redis.{baseurl}": at})
+    dns.resolver.override_system_resolver(over)
+
+
+def generate_traefik_config(from_ip, from_port, to_ip, to_port):
+    return f"""providers:
+  file:
+    filename: traefik.yml
+
+entryPoints:
+  websecure:
+    address: "{from_ip}:{from_port}"
+
+tcp:
+  routers:
+    router4websecure:
+      entryPoints:
+        - websecure
+      service: websecure-forward
+      rule: "HostSNI(`*`)"
+      tls:
+         passthrough: true
+
+  services:
+    websecure-forward:
+      loadBalancer:
+        servers:
+          - address: "{to_ip}:{to_port}"""

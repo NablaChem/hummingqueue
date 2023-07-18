@@ -11,16 +11,16 @@
 #SBATCH --signal=B:15@120
 
 # libraries called from python modules themselves may look for several environment variables
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export VECLIB_MAXIMUM_THREADS=1
+export OMP_NUM_THREADS=${ncores}
+export MKL_NUM_THREADS=${ncores}
+export NUMEXPR_NUM_THREADS=${ncores}
+export OPENBLAS_NUM_THREADS=${ncores}
+export VECLIB_MAXIMUM_THREADS=${ncores}
 
 # load env once
-export MAMBA_ROOT_PREFIX="/home/users/0026/uk092940/hmq/envs"
-eval "$(./micromamba shell hook --shell bash )"
-micromamba activate hmq_3.9
+export MAMBA_ROOT_PREFIX="${envs}"
+eval "$$(${binaries}/micromamba shell hook --shell bash )"
+micromamba activate hmq_${pyver}
 
 # cleanup support
 cleanup() {
@@ -28,24 +28,32 @@ cleanup() {
 	pkill -P $$
 	
 	# delete tmp directories
-	rm -rf /local/workdir-$SLURM_JOB_ID-*
-	
+	rm -rf /local/workdir-$$SLURM_JOB_ID-*
 }
 trap cleanup 15
 
 # run in local tmpdir
-for INSTANCE in $(seq $SLURM_JOB_CPUS_PER_NODE);
+for INSTANCE in $$(seq $$SLURM_JOB_CPUS_PER_NODE);
 do
-	TMPDIR="/local/workdir-$SLURM_JOB_ID-$INSTANCE"
-	mkdir $TMPDIR
-	cp -r $SLURM_SUBMIT_DIR/local/* $TMPDIR/
-	cd $TMPDIR
-	export PYSCF_TMPDIR=$TMPDIR
-	make worker > /dev/null 2>&1 &
+	TMPDIR="/local/workdir-$$SLURM_JOB_ID-$$INSTANCE"
+	mkdir $$TMPDIR
+	cp -r $$SLURM_SUBMIT_DIR/local/* $$TMPDIR/
+	cd $$TMPDIR
+	export PYSCF_TMPDIR=$$TMPDIR
+	cat << EOF > config.py
+	import hmq
+hmq.use_tunnel("${gateway}", "${baseurl}")
+REDIS_HOST = 'redis.${baseurl}'
+REDIS_PORT = '${gatewayport}'
+REDIS_SSL = True             # Default: False
+REDIS_SSL_CA_CERTS = None    # Default: None
+REDIS_SSL_CERT_REQS = None # only for debug
+REDIS_DB = 1                 # Default: 0
+EOF
+	rq worker -c config -w hmq.CachedWorker --max-idle-time 60 --quiet --burst ${queues} > /dev/null 2>&1 &
 	cd 
 done
 
 # wait for all subprocesses to be complete
 wait
 cleanup
-
