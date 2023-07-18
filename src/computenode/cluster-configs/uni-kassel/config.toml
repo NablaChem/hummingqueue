@@ -10,4 +10,4 @@ port = 42424
 name = "Kassel"
 envs = "/home/users/0026/uk092940/hmq_prod/envs"
 binaries = "/home/users/0026/uk092940/hmq_prod/bin"
-
+maxjobs = 10
