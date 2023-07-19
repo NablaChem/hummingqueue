@@ -11,7 +11,7 @@ st.title("Hummingqueue Dashboard")
 col1, col2 = st.columns(2)
 
 
-result = requests.get("http://hmq/usage/inspect")
+result = requests.get("http://hmq/queue/inspect")
 
 rows = []
 for minutes_ago, data in result.json().items():
@@ -24,9 +24,15 @@ col1.line_chart(df, x="age", y=["cores_available", "cores_used"])
 col2.caption("Queue depth")
 col2.line_chart(df, x="age", y=["tasks_queued"])
 col2.line_chart(df, x="age", y=["tasks_running"])
+
+col1, col2 = st.columns(2)
+col1.caption("Datacenters")
+result = requests.get("http://hmq/datacenters/inspect")
+rows = []
+for datacenter, last_seen in result.json().items():
+    rows.append({"datacenter": datacenter, "minutes ago": last_seen})
+df = pd.DataFrame(rows)
+col1.dataframe(df)
 # col2.caption("Tags")
 # for tag in "foo bar sdjfhwsökgdjhsökgj".split():
 #    col2.progress(0.54, tag)#
-
-# col1, col2 = st.columns(2)
-# col1.caption("Hello")

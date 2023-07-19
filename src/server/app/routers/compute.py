@@ -256,6 +256,15 @@ def inspect_usage():
     return ret
 
 
+@app.get("/datacenters/inspect", tags=["statistics"])
+def inspect_usage():
+    now = time.time()
+    ret = {}
+    for dc in auth.db.heartbeat.find():
+        ret[dc["datacenter"]] = max(0, int(now - dc["ts"]))
+    return ret
+
+
 class QueueHasWork(BaseModel):
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
     datacenter: str = Field(..., description="Datacenter checking in.")
