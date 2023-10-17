@@ -15,7 +15,10 @@ import json
 import hashlib
 import configparser
 from pathlib import Path
+import nacl
 from nacl.secret import SecretBox
+from nacl.public import PrivateKey, SealedBox
+from nacl.signing import SigningKey
 import tqdm
 from rq import Worker
 
@@ -27,13 +30,97 @@ class API:
         self._box = None
         self._url = None
 
-    def setup(self, url, key):
+    def setup(self, url: str):
         config = configparser.ConfigParser()
         config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
-        config["server"] = {"url": url, "key": key}
+
+        # generate new random user key
+        if "server" in config:
+            if config["server"]["url"] == url:
+                user_signing_key = SigningKey(
+                    config["server"]["sign"], encoder=nacl.encoding.Base64Encoder
+                )
+                user_encryption_key = PrivateKey(
+                    config["server"]["encrypt"], encoder=nacl.encoding.Base64Encoder
+                )
+            else:
+                raise ValueError(
+                    "Already configured for another instance. Currently, only one instance is supported."
+                )
+        else:
+            user_signing_key = SigningKey.generate()
+            user_encryption_key = PrivateKey.generate()
+        sign_b64 = user_signing_key.encode(encoder=nacl.encoding.Base64Encoder).decode(
+            "ascii"
+        )
+        encrypt_b64 = user_encryption_key.encode(
+            encoder=nacl.encoding.Base64Encoder
+        ).decode("ascii")
+        config["server"] = {"url": url, "sign": sign_b64, "encrypt": encrypt_b64}
+
         Path("~/.hummingqueue").expanduser().mkdir(exist_ok=True)
         with open(Path("~/.hummingqueue").expanduser() / "config.ini", "w") as f:
             config.write(f)
+
+        # build registration string
+        verify_key = user_signing_key.verify_key.encode(
+            encoder=nacl.encoding.Base64Encoder
+        ).decode("ascii")
+        public_key = user_encryption_key.public_key.encode(
+            encoder=nacl.encoding.Base64Encoder
+        ).decode("ascii")
+        return f"ADD-USER_{verify_key}_{public_key}"
+
+    def grant_access(self, signing_request: str, adminkey: str, username: str):
+        self._build_box()
+
+        # check for matching admin signing key
+        admin_signing_key = SigningKey(adminkey, encoder=nacl.encoding.Base64Encoder)
+        admin_verify_key = admin_signing_key.verify_key.encode(
+            encoder=nacl.encoding.Base64Encoder
+        ).decode("ascii")
+        user_verify_key = self._signature.verify_key.encode(
+            encoder=nacl.encoding.Base64Encoder
+        ).decode("ascii")
+        remote_admin_verify_key = self._post(
+            "/user/secrets", {"sign": user_verify_key}
+        )["admin"]
+        if remote_admin_verify_key != admin_verify_key:
+            raise ValueError("Invalid admin key for this installation.")
+
+        prefix, verify_key, public_key = signing_request.split("_")
+        if prefix != "ADD-USER":
+            raise ValueError("Invalid signing request.")
+
+        # sign to give permission
+        admin_signing_key = SigningKey(adminkey, encoder=nacl.encoding.Base64Encoder)
+        signature = admin_signing_key.sign(verify_key.encode("ascii")).signature
+        b64_signature = base64.b64encode(signature).decode("ascii")
+
+        # encrypt compute secret for user
+        user_encryption_key = PrivateKey(
+            public_key, encoder=nacl.encoding.Base64Encoder
+        )
+        box = SealedBox(user_encryption_key)
+        encrypted_secret = base64.b64encode(box.encrypt(self._computesecret)).decode(
+            "ascii"
+        )
+        encrypted_message = base64.b64encode(box.encrypt(self._messagekey)).decode(
+            "ascii"
+        )
+
+        payload = {
+            "sign": verify_key,
+            "encrypt": public_key,
+            "signature": b64_signature,
+            "username": username,
+            "compute": encrypted_secret,
+            "message": encrypted_message,
+        }
+        try:
+            response = self._post("/user/add", payload)
+        except:
+            raise ValueError("Cannot submit signature. Is the admin key correct?")
 
     def _clean_instance(self, instance):
         self._verify = True
@@ -73,7 +160,12 @@ class API:
         if self._box is None:
             config = configparser.ConfigParser()
             config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
-            self._box = SecretBox(base64.b64decode(config["server"]["key"]))
+            self._computesecret = base64.b64decode(config["server"]["compute"])
+            self._messagekey = base64.b64decode(config["server"]["message"])
+            self._box = SecretBox(self._computesecret)
+            self._signature = SigningKey(
+                config["server"]["sign"], encoder=nacl.encoding.Base64Encoder
+            )
             self._url = self._clean_instance(config["server"]["url"])
 
     def _encrypt(self, obj, raw=False):
@@ -119,7 +211,9 @@ class API:
             "digest": digest,
             "major": sys.version_info.major,
             "minor": sys.version_info.minor,
-            "packages": [self._encrypt(_) for _ in remote_function["packages"]],
+            "packages": [
+                self._encrypt(_, raw=True) for _ in remote_function["packages"]
+            ],
             "challenge": self._encrypt(str(time.time()), raw=True),
         }
         result = self._post("/function/register", payload)
@@ -355,8 +449,12 @@ class Tag:
         return res
 
 
-def setup(url, key):
-    api.setup(url, key)
+def request_access(url: str):
+    return api.setup(url)
+
+
+def grant_access(signing_request: str, adminkey: str, username: str):
+    api.grant_access(signing_request, adminkey, username)
 
 
 def task(func):
