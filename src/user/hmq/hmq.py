@@ -17,8 +17,8 @@ import configparser
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
-from nacl.public import PrivateKey, SealedBox
-from nacl.signing import SigningKey
+from nacl.public import PrivateKey, SealedBox, PublicKey
+from nacl.signing import SigningKey, VerifyKey
 import tqdm
 from rq import Worker
 
@@ -74,20 +74,6 @@ class API:
     def grant_access(self, signing_request: str, adminkey: str, username: str):
         self._build_box()
 
-        # check for matching admin signing key
-        admin_signing_key = SigningKey(adminkey, encoder=nacl.encoding.Base64Encoder)
-        admin_verify_key = admin_signing_key.verify_key.encode(
-            encoder=nacl.encoding.Base64Encoder
-        ).decode("ascii")
-        user_verify_key = self._signature.verify_key.encode(
-            encoder=nacl.encoding.Base64Encoder
-        ).decode("ascii")
-        remote_admin_verify_key = self._post(
-            "/user/secrets", {"sign": user_verify_key}
-        )["admin"]
-        if remote_admin_verify_key != admin_verify_key:
-            raise ValueError("Invalid admin key for this installation.")
-
         prefix, verify_key, public_key = signing_request.split("_")
         if prefix != "ADD-USER":
             raise ValueError("Invalid signing request.")
@@ -98,16 +84,14 @@ class API:
         b64_signature = base64.b64encode(signature).decode("ascii")
 
         # encrypt compute secret for user
-        user_encryption_key = PrivateKey(
-            public_key, encoder=nacl.encoding.Base64Encoder
-        )
-        box = SealedBox(user_encryption_key)
+        user_encryption_key = base64.b64decode(public_key)
+        box = SealedBox(PublicKey(user_encryption_key))
         encrypted_secret = base64.b64encode(box.encrypt(self._computesecret)).decode(
             "ascii"
         )
-        encrypted_message = base64.b64encode(box.encrypt(self._messagekey)).decode(
-            "ascii"
-        )
+        encrypted_message = base64.b64encode(
+            box.encrypt(self._messagekey.encode("utf8"))
+        ).decode("ascii")
 
         payload = {
             "sign": verify_key,
@@ -160,13 +144,50 @@ class API:
         if self._box is None:
             config = configparser.ConfigParser()
             config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
-            self._computesecret = base64.b64decode(config["server"]["compute"])
-            self._messagekey = base64.b64decode(config["server"]["message"])
-            self._box = SecretBox(self._computesecret)
+            self._url = self._clean_instance(config["server"]["url"])
             self._signature = SigningKey(
                 config["server"]["sign"], encoder=nacl.encoding.Base64Encoder
             )
-            self._url = self._clean_instance(config["server"]["url"])
+            try:
+                self._computesecret = base64.b64decode(config["server"]["compute"])
+            except:
+                # no compute secret yet, need to fetch it
+                public_key = self._signature.verify_key.encode(
+                    encoder=nacl.encoding.Base64Encoder
+                ).decode("ascii")
+                response = self._post("/user/secrets", {"sign": public_key})
+
+                # decrypt response
+                user_encryption_key = PrivateKey(
+                    config["server"]["encrypt"], encoder=nacl.encoding.Base64Encoder
+                )
+                userbox = SealedBox(user_encryption_key)
+                for item in "compute message".split():
+                    self._computesecret = userbox.decrypt(
+                        base64.b64decode(response[item])
+                    )
+                    config["server"][item] = base64.b64encode(
+                        self._computesecret
+                    ).decode("ascii")
+                config["server"]["admin"] = response["admin"]
+                config["server"]["message"] = base64.b64decode(
+                    config["server"]["message"]
+                ).decode("ascii")
+
+                # save result
+                with open(
+                    Path("~/.hummingqueue").expanduser() / "config.ini", "w"
+                ) as f:
+                    config.write(f)
+
+                # finally load compute secret
+                self._computesecret = base64.b64decode(config["server"]["compute"])
+            self._messagekey = config["server"]["message"]
+            try:
+                self._adminkey = base64.b64decode(config["server"]["admin"])
+            except:
+                pass
+            self._box = SecretBox(self._computesecret)
 
     def _encrypt(self, obj, raw=False):
         self._build_box()
@@ -188,7 +209,9 @@ class API:
         return message
 
     def _post(self, endpoint, payload):
-        self._build_box()
+        if endpoint != "/user/secrets":
+            self._build_box()
+
         response = requests.post(
             self._url + endpoint, json=payload, verify=self._verify
         )
@@ -203,12 +226,23 @@ class API:
         return response
 
     def register_function(self, remote_function: dict, digest: str):
+        self._build_box()
+
         remote_function["callable"] = base64.b64encode(
             remote_function["callable"]
         ).decode("ascii")
+
+        # sign digest
+        signature = self._signature.sign(digest.encode("ascii")).signature
+        b64_signature = base64.b64encode(signature).decode("ascii")
+
         payload = {
             "function": self._encrypt(remote_function),
             "digest": digest,
+            "signature": b64_signature,
+            "signing_key": self._signature.verify_key.encode(
+                encoder=nacl.encoding.Base64Encoder
+            ).decode("ascii"),
             "major": sys.version_info.major,
             "minor": sys.version_info.minor,
             "packages": [
@@ -222,6 +256,7 @@ class API:
                 return True
         except:
             pass
+
         return False
 
     def retrieve_results(self, tasks: list[str]):
@@ -269,6 +304,29 @@ class API:
             return
 
         payload = self._get(f"/function/fetch/{function}").json()
+
+        # verify digest
+        digest = hashlib.sha256(base64.b64decode(payload["function"])).hexdigest()
+        if digest != payload["digest"] or function != digest:
+            raise ValueError("Function digest does not match.")
+
+        # verify digest signature
+        signature = base64.b64decode(payload["signature"])
+        verify_key = VerifyKey(base64.b64decode(payload["signing_key"]))
+        try:
+            verify_key.verify(function, signature)
+        except:
+            raise ValueError("Cannot verify function signature.")
+
+        # verify user authorization
+        signature = base64.b64decode(payload["authorization"])
+        admin_verify = VerifyKey(self._adminkey)
+        try:
+            admin_verify.verify(payload["signing_key"], signature)
+        except:
+            raise ValueError("Cannot verify function authorization.")
+
+        # load function
         remote_function = self._box.decrypt(base64.b64decode(payload["function"]))
         packages = [self._box.decrypt(base64.b64decode(_)) for _ in payload["packages"]]
         remote_function = json.loads(remote_function)

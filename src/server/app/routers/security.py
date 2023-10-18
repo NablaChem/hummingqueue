@@ -39,7 +39,7 @@ def user_add(body: UserAdd):
     # verify admin signature
     try:
         auth.admin_signature.verify(
-            signature=base64.b64decode(body.signature), data=base64.b64decode(body.sign)
+            body.sign.encode("ascii"), base64.b64decode(body.signature)
         )
     except:
         raise HTTPException(
