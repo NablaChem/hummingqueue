@@ -309,16 +309,22 @@ class API:
 
         payload = self._get(f"/function/fetch/{function}").json()
 
+        # decrypt payload
+        remote_function = self._box.decrypt(base64.b64decode(payload["function"]))
+        packages = [self._box.decrypt(base64.b64decode(_)) for _ in payload["packages"]]
+        remote_function = json.loads(remote_function)
+        callable = base64.b64decode(remote_function["callable"])
+
         # verify digest
-        digest = hashlib.sha256(base64.b64decode(payload["function"])).hexdigest()
-        if digest != payload["digest"] or function != digest:
+        digest = hashlib.sha256(callable).hexdigest()
+        if function != digest:
             raise ValueError("Function digest does not match.")
 
         # verify digest signature
         signature = base64.b64decode(payload["signature"])
         verify_key = VerifyKey(base64.b64decode(payload["signing_key"]))
         try:
-            verify_key.verify(function, signature)
+            verify_key.verify(function.encode("ascii"), signature)
         except:
             raise ValueError("Cannot verify function signature.")
 
@@ -326,15 +332,11 @@ class API:
         signature = base64.b64decode(payload["authorization"])
         admin_verify = VerifyKey(self._adminkey)
         try:
-            admin_verify.verify(payload["signing_key"], signature)
+            admin_verify.verify(payload["signing_key"].encode("ascii"), signature)
         except:
             raise ValueError("Cannot verify function authorization.")
 
         # load function
-        remote_function = self._box.decrypt(base64.b64decode(payload["function"]))
-        packages = [self._box.decrypt(base64.b64decode(_)) for _ in payload["packages"]]
-        remote_function = json.loads(remote_function)
-        callable = base64.b64decode(remote_function["callable"])
         for package in packages:
             # system call to install via pip
             subprocess.run(
