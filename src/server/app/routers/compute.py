@@ -94,7 +94,7 @@ def task_register(body: FunctionRegister):
 def function_fetch(digest: str):
     code = auth.db.functions.find_one({"digest": digest})
     if code:
-        authorization = auth.users.find_one({"sign": code["signing_key"]})
+        authorization = auth.db.users.find_one({"sign": code["signing_key"]})
         return {
             "function": code["function"],
             "packages": code["packages"],

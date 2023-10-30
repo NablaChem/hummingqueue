@@ -189,6 +189,10 @@ class API:
                 pass
             self._box = SecretBox(self._computesecret)
 
+    def _get_message_secret(self):
+        self._build_box()
+        return self._messagekey
+
     def _encrypt(self, obj, raw=False):
         self._build_box()
 
