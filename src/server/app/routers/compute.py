@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict
 import rq
 import re
 import base64
@@ -43,6 +43,9 @@ class FunctionRegister(BaseModel):
     packages: List[str] = Field(
         ..., description="List of encrypted packages to install"
     )
+    packages_hashes: List[str] = Field(
+        ..., description="Hashes of the packages to install in same order as packages."
+    )
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
 
 
@@ -78,7 +81,7 @@ def task_register(body: FunctionRegister):
                 "signing_key": body.signing_key,
                 "major": body.major,
                 "minor": body.minor,
-                "packages": body.packages,
+                "packages": dict(zip(body.packages_hashes, body.packages)),
             }
         )
         auth.db.logs.insert_one(
@@ -297,6 +300,7 @@ def inspect_usage():
 class QueueHasWork(BaseModel):
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
     datacenter: str = Field(..., description="Datacenter checking in.")
+    packages: Dict[str, List[str]] = Field(..., description="Installed packages.")
 
 
 @app.post("/queue/haswork", tags=["statistics"])
