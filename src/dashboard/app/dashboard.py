@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import human_readable
 import requests
 from streamlit_autorefresh import st_autorefresh
 
@@ -30,7 +31,8 @@ col1.caption("Datacenters")
 result = requests.get("http://hmq/datacenters/inspect")
 rows = []
 for datacenter, last_seen in result.json().items():
-    rows.append({"datacenter": datacenter, "minutes ago": last_seen})
+    explained = human_readable.time_delta(dt.timedelta(seconds=last_seen)
+    rows.append({"datacenter": datacenter, "last seen": explained})
 df = pd.DataFrame(rows)
 col1.dataframe(df)
 # col2.caption("Tags")

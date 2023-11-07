@@ -73,6 +73,6 @@ def flow_control():
     # MongoDB -> redis
     last_update = 0
     while True:
-        refill_redis(100)
+        refill_redis(500)
         last_update = update_stats(last_update)
         time.sleep(1)
