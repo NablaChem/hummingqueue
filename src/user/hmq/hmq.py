@@ -1,4 +1,3 @@
-# %%
 import dns.resolver
 import dns.message
 import uuid
@@ -14,6 +13,7 @@ import cloudpickle
 import json
 import hashlib
 import configparser
+import sentry_sdk
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
@@ -23,6 +23,14 @@ import tqdm
 from rq import Worker
 
 functions = {}
+
+# optionally load sentry
+try:
+    config = configparser.ConfigParser()
+    config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
+    sentry_sdk.init(config["server"]["sentry"])
+except:
+    pass
 
 
 class API:
@@ -212,6 +220,27 @@ class API:
         )
         return message
 
+    def _hash(self, obj):
+        self._build_box()
+
+        message = obj.encode("utf-8")
+        return hashlib.sha256(self._computesecret + message).hexdigest()
+
+    def missing_depdencies(self, datacenter, installlist, python_version):
+        payload = {
+            "datacenter": datacenter,
+            "version": python_version,
+            "challenge": self._encrypt(str(time.time()), raw=True),
+        }
+        requirements = self._post("/queue/requirements", payload)
+
+        # decrypt requirements
+        requirements = [self._decrypt(_) for _ in requirements]
+
+        with open(installist, "r") as fh:
+            installed = fh.read().splitlines()
+        return [req for req in requirements if req not in installed]
+
     def _post(self, endpoint, payload):
         if endpoint != "/user/secrets":
             self._build_box()
@@ -252,6 +281,7 @@ class API:
             "packages": [
                 self._encrypt(_, raw=True) for _ in remote_function["packages"]
             ],
+            "packages_hashes": [self._hash(_) for _ in remote_function["packages"]],
             "challenge": self._encrypt(str(time.time()), raw=True),
         }
         result = self._post("/function/register", payload)
@@ -344,12 +374,23 @@ class API:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+
         functions[function] = cloudpickle.loads(callable)
 
-    def has_jobs(self, datacenter):
+    def has_jobs(self, datacenter, packagelists):
+        # build list of packages
+        packages = {}
+        for pyver, packagelist in packagelists.items():
+            thisver = []
+            with open(packagelist, "r") as fh:
+                ps = fh.read().splitlines()
+
+            packages[pyver] = map(self._hash, ps)
+
         payload = {
             "datacenter": datacenter,
             "challenge": self._encrypt(str(time.time()), raw=True),
+            "packages": packages,
         }
         return self._post("/queue/haswork", payload)
 

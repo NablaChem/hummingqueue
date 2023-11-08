@@ -6,3 +6,4 @@ dnspython
 cloudpickle
 tqdm
 rq
+sentry_sdk
