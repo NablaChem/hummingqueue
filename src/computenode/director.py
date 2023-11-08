@@ -8,20 +8,63 @@ import sys
 import os
 from string import Template
 
+# sentry
+import sentry_sdk
+
+sentry_sdk.init(
+    dsn="https://94f2cd3ea02b7eac1a06d8e0f387645d@o4504798970904576.ingest.sentry.io/4506149927190528"
+)
+
+
 def install(config, pyver):
-    installfile=f"{config["datacenter"]["tmpdir"]}/install.sh"
-    with open(installfile) as fh:
-        fh.write(f'''#!/bin/bash
+    installfile = f"{config['datacenter']['tmpdir']}/install.sh"
+    with open(installfile, "w") as fh:
+        fh.write(
+            f"""#!/bin/bash
 export MAMBA_ROOT_PREFIX={config["datacenter"]["envs"]}
 eval "$({config["datacenter"]["binaries"]}/micromamba shell hook --shell bash )"
 micromamba create -n hmq_{pyver}
 micromamba activate hmq_{pyver}
 micromamba install python={pyver} -c conda-forge -y
 pip install hmq
-''')
+"""
+        )
     subprocess.run(shlex.split(f"chmod +x {installfile}"))
     subprocess.run(shlex.split(installfile))
     os.remove(installfile)
+
+
+def install_packages(config, pyver, missing):
+    installlist = f"{config['datacenter']['envs']}/envs/hmq_{pyver}/pkg.list"
+    installfile = f"{config['datacenter']['tmpdir']}/install.sh"
+    with open(installfile, "w") as fh:
+        fh.write(
+            f"""#!/bin/bash
+export MAMBA_ROOT_PREFIX={config["datacenter"]["envs"]}
+eval "$({config["datacenter"]["binaries"]}/micromamba shell hook --shell bash )"
+micromamba activate hmq_{pyver}
+for package in {" ".join(missing)};
+do
+    pip install $package;
+    echo $package >> {installist};
+done
+"""
+        )
+    subprocess.run(shlex.split(f"chmod +x {installfile}"))
+    subprocess.run(shlex.split(installfile))
+    os.remove(installfile)
+
+
+def build_packagelists(config):
+    paths = glob.glob(f"{config['datacenter']['envs']}/envs/hmq_*/pkg.list")
+    ps = {}
+    for path in paths:
+        pyver = path.split("/")[-2].split("_")[-1]
+        if pyver == "base":
+            continue
+        ps[pyver] = path
+    return ps
+
 
 def main():
     # test for conda env name
@@ -30,7 +73,7 @@ def main():
         sys.exit(1)
 
     # load config
-    configfile = f"{sys.argv[1]}/config.toml"
+    configfile = sys.argv[1] + "/config.toml"
     with open(configfile) as f:
         config = toml.load(f)
 
@@ -70,7 +113,8 @@ def main():
         pyvers = []
 
         # get jobs
-        qs = hmq.api.has_jobs(config["datacenter"]["name"])
+        packagelists = build_packagelists()
+        qs = hmq.api.has_jobs(config["datacenter"]["name"], packagelists)
         for q in qs:
             variables = {
                 "pyver": q["version"],
@@ -93,11 +137,20 @@ def main():
         for pyver in set(pyvers):
             if os.path.exists(f"{config['datacenter']['envs']}/envs/hmq_{pyver}"):
                 continue
+            install(config, pyver)
 
-            install(pyver)
+        # install requirements
+        for pyver in set(pyvers):
+            installlist = f"{config['datacenter']['envs']}/envs/hmq_{pyver}/pkg.list"
+            missing = hmq.api.missing_dependencies(
+                config["datacenter"]["name"], installist, pyver
+            )
+            if len(missing) > 0:
+                install_packages(config, pyver, missing)
 
         # test how many jobs are already queued
-        output = subprocess.check_output(shlex.split("squeue -u $USER"), shell=True)
+        cmd = f"squeue -u {os.getenv('USER', '')} "
+        output = subprocess.check_output(shlex.split(cmd))
         njobs = len(output.splitlines()) - 1
         if njobs >= config["datacenter"]["maxjobs"]:
             continue
@@ -108,7 +161,9 @@ def main():
                 content = Template(templatestr).substitute(variables)
                 fh.write(content)
 
-            subprocess.run(shlex.split("sbatch hmq.job"), cwd=config["datacenter"]["tmpdir"])
+            subprocess.run(
+                shlex.split("sbatch hmq.job"), cwd=config["datacenter"]["tmpdir"]
+            )
             njobs += 1
             if njobs >= config["datacenter"]["maxjobs"]:
                 break
