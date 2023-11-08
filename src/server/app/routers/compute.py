@@ -137,9 +137,7 @@ def tasks_submit(body: TaskSubmit):
         queues = [f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-any']
 
     for queue in queues:
-        auth.db.active_queues.update_one(
-            {"queue": queue}, {"$inc": {"submits": 1}}, upsert=True
-        )
+        auth.db.active_queues.update_one({"queue": queue}, upsert=True)
 
     for call in calls:
         taskid = str(uuid.uuid4())
@@ -276,6 +274,31 @@ def results_retreive(body: ResultsRetrieve):
     return results
 
 
+class ResultsRetrieve(BaseModel):
+    datacenter: str = Field(..., description="Datacenter name")
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    version: str = Field(..., description="Python version.")
+
+
+@app.post("/queue/requirements", tags=["compute"])
+def queue_requirements(body: QueueRequirements):
+    verify_challenge(body.challenge)
+
+    major, minor = body.version.split(".")
+    major = int(major)
+    minor = int(minor)
+
+    pipeline = [
+        {"$match": {"major": major, "minor": minor}},
+        {"$project": {"packages": 1, "_id": 0}},
+        {"$project": {"packages": {"$objectToArray": "$packages"}}},
+        {"$unwind": "$packages"},
+        {"$group": {"_id": "$packages.k", "name": {"$first": "$packages.v"}}},
+    ]
+
+    return [_["name"] for _ in auth.db.functions.aggregate(pipeline)]
+
+
 @app.get("/queue/inspect", tags=["statistics"])
 def inspect_usage():
     ret = {}
@@ -309,7 +332,9 @@ def task_inspect(body: QueueHasWork):
 
     # update heartbeat
     auth.db.heartbeat.update_one(
-        {"datacenter": body.datacenter}, {"$set": {"ts": time.time()}}, upsert=True
+        {"datacenter": body.datacenter},
+        {"$set": {"ts": time.time(), "packages": body.packages}},
+        upsert=True,
     )
 
     # check if there is work
