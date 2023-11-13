@@ -35,7 +35,8 @@ def refill_redis(njobs: int):
         q = Queue(name, connection=auth.redis)
 
         seen_at_least_one = False
-        for i in range(njobs - len(q)):
+        remaining = njobs - len(q)
+        for _ in range(remaning):
             task = auth.db.tasks.find_one_and_update(
                 {"status": "pending", "queues": name},
                 {"$set": {"status": "queued"}},
@@ -55,7 +56,7 @@ def refill_redis(njobs: int):
                 {"event": "task/fetch", "id": task["id"], "ts": time.time()}
             )
 
-        if not seen_at_least_one:
+        if remaining > 0 and not seen_at_least_one:
             auth.db.active_queues.delete_one({"queue": name})
 
         if len(logentries) > 0:
@@ -79,7 +80,9 @@ def check_active_queues(last_run):
         {"$group": {"_id": "$queues"}},
     ]
     for queue in auth.db.tasks.aggregate(pipeline):
-        auth.db.active_queues.update_one({"queue": queue["_id"]}, upsert=True)
+        auth.db.active_queues.update_one(
+            {"queue": queue["_id"]}, {"queue": queue["_id"]}, upsert=True
+        )
     return time.time()
 
 
@@ -114,6 +117,12 @@ def flow_control():
     last_active_queues = 0
     while True:
         refill_redis(500)
-        last_update = update_stats(last_update)
-        last_active_queues = check_active_queues()
+        try:
+            last_update = update_stats(last_update)
+        except:
+            continue
+        try:
+            last_active_queues = check_active_queues(last_active_queues)
+        except:
+            continue
         time.sleep(1)

@@ -137,7 +137,9 @@ def tasks_submit(body: TaskSubmit):
         queues = [f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-any']
 
     for queue in queues:
-        auth.db.active_queues.update_one({"queue": queue}, upsert=True)
+        auth.db.active_queues.update_one(
+            {"queue": queue}, {"$set": {"queue": queue}}, upsert=True
+        )
 
     for call in calls:
         taskid = str(uuid.uuid4())
@@ -158,8 +160,9 @@ def tasks_submit(body: TaskSubmit):
 
     with auth.client.start_session() as session:
         with session.start_transaction():
-            auth.db.logs.insert_many(logentries)
-            auth.db.tasks.insert_many(taskentries)
+            if len(logentries) > 0:
+                auth.db.logs.insert_many(logentries)
+                auth.db.tasks.insert_many(taskentries)
 
     return uuids
 
@@ -274,7 +277,7 @@ def results_retreive(body: ResultsRetrieve):
     return results
 
 
-class ResultsRetrieve(BaseModel):
+class QueueRequirements(BaseModel):
     datacenter: str = Field(..., description="Datacenter name")
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
     version: str = Field(..., description="Python version.")
