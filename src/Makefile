@@ -10,3 +10,5 @@ worker:
 	cd computenode; PYTHONPATH="../user:${PYTHONPATH}" rq worker -c config -w hmq.CachedWorker --max-idle-time 60  --burst
 director:
 	cd computenode; PYTHONPATH="../user:${PYTHONPATH}" python director.py cluster-configs/localhost
+pypi:
+	cd user; rm dist/*; python setup.py sdist; twine upload dist/*
