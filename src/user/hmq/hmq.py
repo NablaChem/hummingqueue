@@ -13,7 +13,6 @@ import cloudpickle
 import json
 import hashlib
 import configparser
-import sentry_sdk
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
@@ -26,6 +25,8 @@ functions = {}
 
 # optionally load sentry
 try:
+    import sentry_sdk
+
     config = configparser.ConfigParser()
     config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
     sentry_sdk.init(config["server"]["sentry"])
@@ -211,13 +212,15 @@ class API:
         message = base64.b64encode(self._box.encrypt(message)).decode("ascii")
         return message
 
-    def _decrypt(self, obj):
+    def _decrypt(self, obj, raw=False):
         self._build_box()
 
         message = obj.encode("utf-8")
-        message = json.loads(
-            self._box.decrypt(base64.b64decode(message.decode("ascii")))
-        )
+        intermediate = self._box.decrypt(base64.b64decode(message.decode("ascii")))
+        if raw:
+            return intermediate
+
+        message = json.loads(intermediate)
         return message
 
     def _hash(self, obj):
@@ -226,7 +229,7 @@ class API:
         message = obj.encode("utf-8")
         return hashlib.sha256(self._computesecret + message).hexdigest()
 
-    def missing_depdencies(self, datacenter, installlist, python_version):
+    def missing_dependencies(self, datacenter, installlist, python_version):
         payload = {
             "datacenter": datacenter,
             "version": python_version,
@@ -235,10 +238,15 @@ class API:
         requirements = self._post("/queue/requirements", payload)
 
         # decrypt requirements
-        requirements = [self._decrypt(_) for _ in requirements]
+        requirements = [
+            self._decrypt(_, raw=True).decode("ascii") for _ in requirements
+        ]
 
-        with open(installist, "r") as fh:
-            installed = fh.read().splitlines()
+        try:
+            with open(installlist, "r") as fh:
+                installed = fh.read().splitlines()
+        except FileNotFoundError:
+            installed = []
         return [req for req in requirements if req not in installed]
 
     def _post(self, endpoint, payload):
@@ -340,9 +348,7 @@ class API:
         payload = self._get(f"/function/fetch/{function}").json()
 
         # decrypt payload
-        remote_function = self._box.decrypt(base64.b64decode(payload["function"]))
-        packages = [self._box.decrypt(base64.b64decode(_)) for _ in payload["packages"]]
-        remote_function = json.loads(remote_function)
+        remote_function = self._decrypt(payload["function"])
         callable = base64.b64decode(remote_function["callable"])
 
         # verify digest
@@ -366,15 +372,6 @@ class API:
         except:
             raise ValueError("Cannot verify function authorization.")
 
-        # load function
-        for package in packages:
-            # system call to install via pip
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", package],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
         functions[function] = cloudpickle.loads(callable)
 
     def has_jobs(self, datacenter, packagelists):
@@ -385,7 +382,7 @@ class API:
             with open(packagelist, "r") as fh:
                 ps = fh.read().splitlines()
 
-            packages[pyver] = map(self._hash, ps)
+            packages[pyver] = list(map(self._hash, ps))
 
         payload = {
             "datacenter": datacenter,
@@ -672,3 +669,33 @@ tcp:
       loadBalancer:
         servers:
           - address: "{to_ip}:{to_port}" """
+
+
+def cli():
+    if len(sys.argv) == 1:
+        print(
+            """Usage: hmq COMMAND [ARGS]
+        
+Commands:
+request_access URL                      Request access to a hummingqueue instance.
+grant_access SIGNING_REQUEST USERNAME   Grant access to a user."""
+        )
+        sys.exit(1)
+
+    if sys.argv[1] == "request_access":
+        if len(sys.argv) != 3:
+            print("Usage: hmq request_access URL")
+            sys.exit(1)
+        print(request_access(sys.argv[1]))
+        sys.exit(0)
+
+    if sys.argv[1] == "grant_access":
+        if len(sys.argv) != 4:
+            print("Usage: hmq grant_access SIGNING_REQUEST USERNAME")
+            sys.exit(1)
+        admin_key = input("Admin key: ")
+        grant_access(sys.argv[2], admin_key, sys.argv[3])
+        sys.exit(0)
+
+    print("Unknown command.")
+    sys.exit(1)
