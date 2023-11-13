@@ -1,4 +1,5 @@
 altair
 pandas
 streamlit
+human-readable
 streamlit-autorefresh
