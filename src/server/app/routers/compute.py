@@ -136,11 +136,6 @@ def tasks_submit(body: TaskSubmit):
     if queues == []:
         queues = [f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-any']
 
-    for queue in queues:
-        auth.db.active_queues.update_one(
-            {"queue": queue}, {"$set": {"queue": queue}}, upsert=True
-        )
-
     for call in calls:
         taskid = str(uuid.uuid4())
         logentries.append({"event": "task/submit", "id": taskid, "ts": time.time()})
@@ -163,6 +158,11 @@ def tasks_submit(body: TaskSubmit):
             if len(logentries) > 0:
                 auth.db.logs.insert_many(logentries)
                 auth.db.tasks.insert_many(taskentries)
+
+    for queue in queues:
+        auth.db.active_queues.update_one(
+            {"queue": queue}, {"$set": {"queue": queue}}, upsert=True
+        )
 
     return uuids
 
