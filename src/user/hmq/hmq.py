@@ -639,13 +639,45 @@ flags QR RD RA
             return dns.resolver.resolve(qname)
 
 
-def use_tunnel(at: str, baseurl: str):
-    over = OverrideResolver({f"hmq.{baseurl}": at, f"redis.{baseurl}": at})
+def use_tunnel(at: str, baseurl: str, sentry_dsn: str = None):
+    redirects = {}
+    if sentry_dsn is not None:
+        sentry_host = sentry_dsn.split("@")[1].split("/")[0]
+        sentry_ip = socket.gethostbyname(sentry_host)
+        redirects[sentry_host] = sentry_ip
+
+    tunnels = {f"hmq.{baseurl}": at, f"redis.{baseurl}": at}
+    if sentry_dsn is not None:
+        tunnels[sentry_host] = at
+    over = OverrideResolver(tunnels)
     over.reset()
     dns.resolver.override_system_resolver(over)
+    return redirects
 
 
-def generate_traefik_config(from_ip, from_port, to_ip, to_port):
+def generate_traefik_config(from_ip, from_port, to_ip, to_port, redirects={}):
+    # build per-host redirects
+    counter = 0
+    routers = ""
+    services = ""
+    for host, ip in redirects.items():
+        routers += f"""
+    routerhost{counter}:
+      entryPoints:
+        - websecure
+      service: forward{counter}
+      rule: "HostSNI(`{host}`)"
+      tls:
+        passthrough: true
+"""
+        services += f"""
+    forward{counter}:
+      loadBalancer:
+        servers:
+          - address: {ip}:443
+"""
+        counter += 1
+
     return f"""providers:
   file:
     filename: traefik.yml
@@ -656,6 +688,7 @@ entryPoints:
 
 tcp:
   routers:
+{routers}
     router4websecure:
       entryPoints:
         - websecure
@@ -668,7 +701,9 @@ tcp:
     websecure-forward:
       loadBalancer:
         servers:
-          - address: "{to_ip}:{to_port}" """
+          - address: "{to_ip}:{to_port}" 
+{services}
+"""
 
 
 def cli():
@@ -686,7 +721,7 @@ grant_access SIGNING_REQUEST USERNAME   Grant access to a user."""
         if len(sys.argv) != 3:
             print("Usage: hmq request_access URL")
             sys.exit(1)
-        print(request_access(sys.argv[1]))
+        print(request_access(sys.argv[2]))
         sys.exit(0)
 
     if sys.argv[1] == "grant_access":

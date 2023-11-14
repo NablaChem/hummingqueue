@@ -2,6 +2,7 @@ import hmq
 import subprocess
 import shlex
 import socket
+import glob
 import time
 import toml
 import sys
@@ -46,7 +47,7 @@ micromamba activate hmq_{pyver}
 for package in {" ".join(missing)};
 do
     pip install $package;
-    echo $package >> {installist};
+    echo $package >> {installlist};
 done
 """
         )
@@ -83,14 +84,24 @@ def main():
             print(f"Error: {binary} not found in {config['datacenter']['binaries']}")
             sys.exit(1)
 
+    # setup tunnel
+    server_address = socket.gethostbyname(f'hmq.{config["server"]["baseurl"]}')
+    try:
+        sentrydsn = config["sentry"]["computenode"]
+    except:
+        sentrydsn = None
+    redirects = hmq.use_tunnel(
+        config["gateway"]["address"], config["server"]["baseurl"], sentrydsn
+    )
+
     # generate traefik config
     filename = config["datacenter"]["tmpdir"] + "/traefik.yml"
-    server_address = socket.gethostbyname(f'hmq.{config["server"]["baseurl"]}')
     content = hmq.generate_traefik_config(
         config["gateway"]["address"],
         str(config["gateway"]["port"]),
         server_address,
         "443",
+        redirects,
     )
     with open(filename, "w") as f:
         f.write(content)
@@ -98,9 +109,6 @@ def main():
     # run traefik
     cmd = f"{config['datacenter']['binaries']}/traefik --config traefik.yml"
     p = subprocess.Popen(shlex.split(cmd), cwd=config["datacenter"]["tmpdir"])
-
-    # setup tunnel
-    hmq.use_tunnel(config["gateway"]["address"], config["server"]["baseurl"])
 
     # request jobs / run heartbeat
     with open(f"{sys.argv[1]}/hmq.job") as fh:
@@ -113,7 +121,7 @@ def main():
         pyvers = []
 
         # get jobs
-        packagelists = build_packagelists()
+        packagelists = build_packagelists(config)
         qs = hmq.api.has_jobs(config["datacenter"]["name"], packagelists)
         for q in qs:
             variables = {
@@ -143,7 +151,7 @@ def main():
         for pyver in set(pyvers):
             installlist = f"{config['datacenter']['envs']}/envs/hmq_{pyver}/pkg.list"
             missing = hmq.api.missing_dependencies(
-                config["datacenter"]["name"], installist, pyver
+                config["datacenter"]["name"], installlist, pyver
             )
             if len(missing) > 0:
                 install_packages(config, pyver, missing)
