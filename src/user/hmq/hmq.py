@@ -3,7 +3,6 @@ import dns.message
 import uuid
 import sys
 import traceback
-import subprocess
 import time
 import requests
 import base64
@@ -20,18 +19,31 @@ from nacl.public import PrivateKey, SealedBox, PublicKey
 from nacl.signing import SigningKey, VerifyKey
 import tqdm
 from rq import Worker
+from urllib.parse import urlparse, ParseResult
 
 functions = {}
 
-# optionally load sentry
-try:
+
+# TODO HERE: add to director, read from toml
+def enable_sentry(sentry_dsn, gateway_port=None):
+    if sentry_dsn == "":
+        return
+
     import sentry_sdk
 
-    config = configparser.ConfigParser()
-    config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
-    sentry_sdk.init(config["server"]["sentry"])
-except:
-    pass
+    if gateway_port is None:
+        gateway_port = 443
+
+    original = urlparse(sentry_dsn)
+    new = ParseResult(
+        scheme=original.scheme,
+        netloc="{}:{}".format(original.hostname, gateway_port),
+        path=original.path,
+        params=original.params,
+        query=original.query,
+        fragment=original.fragment,
+    )
+    sentry_sdk.init(dsn=new.geturl())
 
 
 class API:
@@ -528,6 +540,7 @@ class Tag:
             remaining = len(self.tasks) - len(self._results) - len(self._errors)
             if not blocking:
                 break
+            time.sleep(5)
         return remaining
 
     @property
@@ -642,7 +655,8 @@ flags QR RD RA
 def use_tunnel(at: str, baseurl: str, sentry_dsn: str = None):
     redirects = {}
     if sentry_dsn is not None:
-        sentry_host = sentry_dsn.split("@")[1].split("/")[0]
+        url = urlparse(sentry_dsn)
+        sentry_host = url.hostname
         sentry_ip = socket.gethostbyname(sentry_host)
         redirects[sentry_host] = sentry_ip
 
