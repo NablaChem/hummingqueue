@@ -432,6 +432,17 @@ class API:
             result = None
         endtime = time.time()
 
+        # limit result size
+        if result is not None:
+            result_kb = len(result) / 1024
+            allowed_kb = 250
+            if result_kb > allowed_kb:
+                result = None
+                errormsg = f"Result size was too large: {result_kb} KB is more than the allowed {allowed_kb} KB."
+                errormsg = base64.b64encode(
+                    box.encrypt(json.dumps(errormsg).encode("utf8"))
+                ).decode("ascii")
+
         overall_end = time.time()
         payload = {
             "task": hmqid,
