@@ -36,7 +36,7 @@ def refill_redis(njobs: int):
 
         seen_at_least_one = False
         remaining = njobs - len(q)
-        for _ in range(remaning):
+        for _ in range(remaining):
             task = auth.db.tasks.find_one_and_update(
                 {"status": "pending", "queues": name},
                 {"$set": {"status": "queued"}},
@@ -96,8 +96,7 @@ def update_stats(last_update: float):
 
     workers = Worker.all(connection=auth.redis)
     nworkers = len(workers)
-    queued = sum([_.count for _ in Queue.all(connection=auth.redis)])
-    njobs = queued + auth.db.tasks.count_documents({"status": "pending"})
+    njobs = auth.db.tasks.count_documents({"status": {"$in": ["pending", "queued"]}})
     nrunning = len([_ for _ in workers if _.state == "busy"])
     auth.db.stats.insert_one(
         {
