@@ -4,6 +4,7 @@ import uuid
 import sys
 import traceback
 import time
+import importlib.metadata
 import requests
 import base64
 import socket
@@ -153,13 +154,19 @@ class API:
             try:
                 response = self._get(f"/ping", baseurl=case)
                 if response.status_code == 200 and response.content == b"pong":
-                    return case
+                    break
             except requests.exceptions.SSLError:
                 raise ValueError("Instance does not use a valid SSL certificate.")
             except:
                 pass
-
-        raise ValueError("Instance is not reachable.")
+        else:
+            raise ValueError("Instance is not reachable.")
+    
+        # test for version match
+        server_version = self._get(f"/version", baseurl=case).json()["version"]
+        client_version = importlib.metadata.version("hmq")
+        if server_version != client_version:
+            raise ValueError(f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq")
 
     def _build_box(self):
         if self._box is None:

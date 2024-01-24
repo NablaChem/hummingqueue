@@ -13,6 +13,8 @@ from .. import auth
 
 app = APIRouter()
 
+VERSION = None
+
 
 @app.get(
     "/auth/challenge",
@@ -21,6 +23,17 @@ app = APIRouter()
 def auth_challenge():
     now = str(time.time())
     return {"challenge": now}
+
+
+@app.get(
+    "/version",
+    tags=["security"],
+)
+def version():
+    if VERSION is None:
+        with open("app/VERSION", "r") as f:
+            VERSION = f.read().strip()
+    return {"version": VERSION}
 
 
 class UserAdd(BaseModel):

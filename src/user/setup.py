@@ -1,8 +1,10 @@
 from setuptools import setup
 
+with open("VERSION") as fh:
+    version = fh.read().strip()
 setup(
     name="hmq",
-    version="0.3.6",
+    version=version,
     description="Distributed computing.",
     url="https://github.com/NablaChem/hummingqueue",
     author="Guido Falk von Rudorff",
