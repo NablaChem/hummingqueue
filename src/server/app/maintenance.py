@@ -50,6 +50,7 @@ def refill_redis(njobs: int):
                     "call": task["call"],
                     "function": task["function"],
                     "hmqid": task["id"],
+                    "job_timeout": "6h",
                 }
             )
             logentries.append(

@@ -25,7 +25,14 @@ services:
       - "--certificatesresolvers.letsencrypt.acme.dnschallenge.provider=${ACME_PROVIDER}"
       - "--certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL}"
       - "--certificatesresolvers.letsencrypt.acme.storage=/SSLcertificates/acme.json"
+      
+      # docker
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
 
+      # EntryPoints
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
     labels:
       - "traefik.http.routers.traefiksecure.tls.certresolver=letsencrypt"
       - "traefik.http.routers.traefiksecure.tls.domains[0].main=*.${BASEURL}"

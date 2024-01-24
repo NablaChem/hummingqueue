@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import human_readable
 import requests
+import datetime as dt
 from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(page_title="Hummingqueue Dashboard", layout="wide")
@@ -31,8 +32,8 @@ col1.caption("Datacenters")
 result = requests.get("http://hmq/datacenters/inspect")
 rows = []
 for datacenter, last_seen in result.json().items():
-    explained = human_readable.time_delta(dt.timedelta(seconds=last_seen)
-    rows.append({"datacenter": datacenter, "last seen": explained})
+    explained = human_readable.time_delta(dt.timedelta(seconds=last_seen))
+    rows.append({"datacenter": datacenter, "last seen": explained + " ago"})
 df = pd.DataFrame(rows)
 col1.dataframe(df)
 # col2.caption("Tags")
