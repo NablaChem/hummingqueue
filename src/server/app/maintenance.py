@@ -76,6 +76,7 @@ def check_active_queues(last_run):
         return last_run
 
     pipeline = [
+        {"$match": {"status": "pending"}},
         {"$project": {"queues": 1}},
         {"$unwind": "$queues"},
         {"$group": {"_id": "$queues"}},
@@ -84,6 +85,34 @@ def check_active_queues(last_run):
         auth.db.active_queues.update_one(
             {"queue": queue["_id"]}, {"queue": queue["_id"]}, upsert=True
         )
+    return time.time()
+
+
+def check_stale_jobs(last_run):
+    """Ensures that all queued jobs are in redis, otherwise reset to pending.
+
+    Idea: ask for queued, then for redis, then for queued again. Stale jobs
+    remain in queued, but are not in redis. Reset them to pending."""
+    # run frequency
+    if time.time() - last_run < 120:
+        return last_run
+
+    # list of queued tasks
+    q1 = set([task["id"] for task in auth.db.tasks.find({"status": "queued"})])
+
+    # list of tasks in redis
+    redis = set(auth.redis.hgetall("id2id").keys())
+
+    # list of queued tasks again
+    q2 = set([task["id"] for task in auth.db.tasks.find({"status": "queued"})])
+
+    stale = (q1 & q2) - redis
+
+    auth.db.tasks.update_many(
+        {"id": {"$in": list(stale)}, "status": "queued"},
+        {"$set": {"status": "pending"}},
+    )
+
     return time.time()
 
 
@@ -115,6 +144,7 @@ def flow_control():
     # MongoDB -> redis
     last_update = 0
     last_active_queues = 0
+    last_stale = 0
     while True:
         refill_redis(500)
         try:
@@ -123,6 +153,10 @@ def flow_control():
             continue
         try:
             last_active_queues = check_active_queues(last_active_queues)
+        except:
+            continue
+        try:
+            last_stale = check_stale_jobs(last_stale)
         except:
             continue
         time.sleep(1)
