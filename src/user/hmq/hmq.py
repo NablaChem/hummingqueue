@@ -13,6 +13,7 @@ import cloudpickle
 import json
 import hashlib
 import configparser
+import functools
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
@@ -161,12 +162,14 @@ class API:
                 pass
         else:
             raise ValueError("Instance is not reachable.")
-    
+
         # test for version match
         server_version = self._get(f"/version", baseurl=case).json()["version"]
         client_version = importlib.metadata.version("hmq")
         if server_version != client_version:
-            raise ValueError(f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq")
+            raise ValueError(
+                f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq"
+            )
 
     def _build_box(self):
         if self._box is None:
@@ -391,7 +394,15 @@ class API:
         except:
             raise ValueError("Cannot verify function authorization.")
 
-        functions[function] = cloudpickle.loads(callable)
+        try:
+            functions[function] = cloudpickle.loads(callable)
+        except Exception as e:
+            msg = "Cannot deserialize function: " + repr(e)
+
+            def raise_later(*args, **kwargs):
+                raise ValueError(kwargs["hmq_message"])
+
+            functions[function] = functools.partial(raise_later, hmq_message=msg)
 
     def has_jobs(self, datacenter, packagelists):
         # build list of packages
