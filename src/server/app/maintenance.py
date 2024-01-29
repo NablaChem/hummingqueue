@@ -83,7 +83,7 @@ def check_active_queues(last_run):
     ]
     for queue in auth.db.tasks.aggregate(pipeline):
         auth.db.active_queues.update_one(
-            {"queue": queue["_id"]}, {"queue": queue["_id"]}, upsert=True
+            {"queue": queue["_id"]}, {"$set": {"queue": queue["_id"]}}, upsert=True
         )
     return time.time()
 
