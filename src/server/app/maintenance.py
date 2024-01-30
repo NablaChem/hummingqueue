@@ -54,7 +54,7 @@ def refill_redis(njobs: int):
                 }
             )
             logentries.append(
-                {"event": "task/fetch", "id": task["id"], "ts": time.time()}
+                {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
             )
 
         if remaining > 0 and not seen_at_least_one:
@@ -99,19 +99,24 @@ def check_stale_jobs(last_run):
 
     # list of queued tasks
     q1 = set([task["id"] for task in auth.db.tasks.find({"status": "queued"})])
+    time.sleep(5)
 
     # list of tasks in redis
     redis = set(auth.redis.hgetall("id2id").keys())
+    time.sleep(5)
 
     # list of queued tasks again
     q2 = set([task["id"] for task in auth.db.tasks.find({"status": "queued"})])
 
     stale = (q1 & q2) - redis
 
-    auth.db.tasks.update_many(
-        {"id": {"$in": list(stale)}, "status": "queued"},
-        {"$set": {"status": "pending"}},
-    )
+    logentries = [{"event": "task/requeue", "id": _, "ts": time.time()} for _ in stale]
+    if len(stale) > 0:
+        auth.db.tasks.update_many(
+            {"id": {"$in": list(stale)}, "status": "queued"},
+            {"$set": {"status": "pending"}},
+        )
+        auth.db.logs.insert_many(logentries)
 
     return time.time()
 
