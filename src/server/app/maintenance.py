@@ -102,7 +102,7 @@ def check_stale_jobs(last_run):
     time.sleep(5)
 
     # list of tasks in redis
-    redis = set(auth.redis.hgetall("id2id").keys())
+    redis = set([_.decode("ascii") for _ in auth.redis.hgetall("id2id").keys()])
     time.sleep(5)
 
     # list of queued tasks again
