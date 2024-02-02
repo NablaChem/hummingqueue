@@ -142,6 +142,67 @@ def update_stats(last_update: float):
             "ts": unixminute_now,
         }
     )
+
+    # track tags
+    tagdetails = auth.db.tasks.aggregate(
+        {
+            "_id": {"tag": "$tag", "ncores": "$ncores", "status": "$status"},
+            "jobcount": {"$sum": 1},
+            "ncores": {"$first": "$ncores"},
+            "tag": {"$first": "$tag"},
+            "status": {"$first": "$status"},
+            "totalduration": {"$sum": "$duration"},
+        }
+    )
+    tagtimes = auth.db.tasks.aggregate(
+        {
+            "_id": {"tag": "$tag"},
+            "received": {"$min": "$received"},
+            "updated": {"$max": "$done"},
+            "tag": {"$first": "$tag"},
+        }
+    )
+
+    tags = {}
+    for line in tagdetails:
+        tag = line["tag"]
+        if tag not in tags:
+            received = 0
+            updated = 0
+            for t in tagtimes:
+                if t["tag"] == tag:
+                    received = t["received"]
+                    updated = t["updated"]
+                    break
+            tags[tag] = {
+                "tag": tag,
+                "queued": 0,
+                "pending": 0,
+                "completed": 0,
+                "failed": 0,
+                "deleted": 0,
+                "corehours": 0,
+                "duration": 0,
+                "received": received,
+                "updated": updated,
+                "ts": unixminute_now,
+            }
+            if line["status"] in [
+                "pending",
+                "queued",
+                "deleted",
+                "completed",
+                "error",
+            ]:
+                status = line["status"]
+                if status == "error":
+                    status = "failed"
+                tags[tag][status] = line["jobcount"]
+            else:
+                continue
+            tags[tag]["corehours"] += line["ncores"] * line["totalduration"]
+    auth.db.stats_tags.insert_many([_ for _ in tags.values()])
+    auth.db.stats_tags.delete_many({"ts": {"$lt": unixminute_now}})
     return now
 
 

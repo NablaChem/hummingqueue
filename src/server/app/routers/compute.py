@@ -136,9 +136,10 @@ def tasks_submit(body: TaskSubmit):
     if queues == []:
         queues = [f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-any']
 
+    now = time.time()
     for call in calls:
         taskid = str(uuid.uuid4())
-        logentries.append({"event": "task/submit", "id": taskid, "ts": time.time()})
+        logentries.append({"event": "task/submit", "id": taskid, "ts": now})
         taskentries.append(
             {
                 "id": taskid,
@@ -149,6 +150,7 @@ def tasks_submit(body: TaskSubmit):
                 "datacenters": body.datacenters,
                 "queues": queues,
                 "status": "pending",
+                "received": now,
             }
         )
         uuids.append(taskid)
@@ -175,17 +177,6 @@ class TasksDelete(BaseModel):
 @app.post("/tasks/delete", tags=["compute"])
 def tasks_delete(body: TasksDelete):
     verify_challenge(body.challenge)
-
-    # mongodb
-    logentries = []
-    existing = auth.db.tasks.find({"id": {"$in": body.delete}})
-    for task in existing:
-        logentries.append({"event": "task/delete", "id": task["id"], "ts": time.time()})
-    existing_ids = [_["id"] for _ in existing]
-    auth.db.tasks.delete_many({"id": {"$in": existing_ids}})
-    if len(logentries) > 0:
-        auth.db.logs.insert_many(logentries)
-
     # rq
     for rqid in maintenance.redis_conn.hmget("id2id", existing_ids):
         if rqid is None:
@@ -195,6 +186,24 @@ def tasks_delete(body: TasksDelete):
         job.cancel()
         job.delete()
     maintenance.redis_conn.hdel("id2id", existing_ids)
+
+    # mongodb
+    logentries = []
+    to_be_deleted = {
+        "id": {"$in": body.delete},
+        "status": {"$in": ["pending", "queued"]},
+    }
+    existing = auth.db.tasks.find(to_be_deleted)
+    now = time.time()
+    for task in existing:
+        logentries.append({"event": "task/delete", "id": task["id"], "ts": now})
+    existing_ids = [_["id"] for _ in existing]
+    auth.db.tasks.update_many(to_be_deleted, {"$set": {"status": "deleted"}})
+    auth.db.tasks.update_many(
+        to_be_deleted, {"$unset": {"error": "", "result": "", "call": ""}}
+    )
+    if len(logentries) > 0:
+        auth.db.logs.insert_many(logentries)
 
     return existing_ids
 
@@ -217,6 +226,22 @@ def task_inspect(body: TasksInspect):
     return result
 
 
+class TasksFind(BaseModel):
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    tag: str = Field(..., description="Tag of which to list all tasks.")
+
+
+@app.post("/tasks/find", tags=["compute"])
+def task_find(body: TasksFind):
+    verify_challenge(body.challenge)
+
+    result = []
+    for task in auth.db.tasks.find({"tag": body.tag}):
+        result.append(task["id"])
+
+    return result
+
+
 class TaskResult(BaseModel):
     task: str = Field(..., description="Task ID")
     result: str = Field(description="Base64-encoded and encrypted result", default=None)
@@ -235,6 +260,7 @@ class ResultsStore(BaseModel):
 def results_store(body: ResultsStore):
     verify_challenge(body.challenge)
 
+    now = time.time()
     for result in body.results:
         is_error = False
         if result.error is not None:
@@ -250,6 +276,7 @@ def results_store(body: ResultsStore):
             "result": result.result,
             "error": result.error,
             "duration": result.duration,
+            "done": now,
         }
         auth.db.tasks.update_one({"id": result.task}, {"$set": update})
 
@@ -271,6 +298,9 @@ def results_retreive(body: ResultsRetrieve):
             if key in task:
                 entry[key] = task[key]
                 has_info = True
+        if task["status"] == "deleted":
+            entry["error"] = "Hummingqueue: Task deleted"
+            has_info = True
         if has_info:
             results[task["id"]] = entry
 
@@ -312,6 +342,28 @@ def inspect_usage():
         stats = {k: v for k, v in stats.items() if k != "_id" and k != "ts"}
         ret[unixminute_now - refts] = stats
     return ret
+
+
+@app.get("/tags/inspect", tags=["statistics"])
+def inspect_tags():
+    unixminute_now = int(time.time() / 60)
+    unixminute_first = unixminute_now - 1
+    tags = {}
+    for stats in auth.db.stats_tags.find({"ts": {"$gte": unixminute_first}}):
+        del stats["_id"]
+        if stats["tag"] not in tags or tags[stats["tag"]]["ts"] < stats["ts"]:
+            tags[stats["tag"]] = stats
+
+    results = []
+    for stats in tags.values():
+        # incomplete or recent
+        if (
+            stats["pending"] > 0
+            or stats["queued"] > 0
+            or unixminute_now - stats["updated"] < 7 * 24 * 60 * 60
+        ):
+            results.append(stats)
+    return results
 
 
 @app.get("/datacenters/inspect", tags=["statistics"])

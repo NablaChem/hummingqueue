@@ -13,6 +13,7 @@ import cloudpickle
 import json
 import hashlib
 import configparser
+import warnings
 import functools
 from pathlib import Path
 import nacl
@@ -167,8 +168,9 @@ class API:
         server_version = self._get(f"/version", baseurl=case).json()["version"]
         client_version = importlib.metadata.version("hmq")
         if server_version != client_version:
-            raise ValueError(
-                f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq"
+            warnings.warn(
+                f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq",
+                DeprecationWarning,
             )
 
     def _build_box(self):
@@ -362,6 +364,16 @@ class API:
         uuids = self._post("/tasks/submit", payload)
         return uuids
 
+    def find_tasks(self, tag: str):
+        payload = {"tag": tag}
+        tasks = self._post("/tasks/find", payload)
+        return tasks
+
+    def delete_tasks(self, tasks: list[str]):
+        payload = {"delete": tasks}
+        deleted = self._post("/tasks/delete", payload)
+        return deleted
+
     def warm_cache(self, function: str):
         self._build_box()
         if function in functions:
@@ -523,7 +535,28 @@ class Tag:
             f.write(json.dumps(meta) + "\n" + payload)
 
     @staticmethod
-    def from_file(filename):
+    def from_queue(tag: str):
+        """Loads a tag from the queue by downloading all data (again). Use sparingly.
+
+        Parameters
+        ----------
+        tag : str
+            The tag name.
+
+        Returns
+        -------
+        Tag
+            Populated object.
+        """
+        t = Tag("")
+        t.name = tag
+        t.tasks = api.find_tasks(tag)
+        t._results = {}
+        t._errors = {}
+        return t
+
+    @staticmethod
+    def from_file(filename: str):
         meta = None
         tasks = []
         results = {}
@@ -539,7 +572,8 @@ class Tag:
                 if row["error"] is not None:
                     errors[row["task"]] = row["error"]
 
-        t = Tag(meta["name"])
+        t = Tag("")
+        t.name = meta["name"]
         t.tasks = tasks
         t._results = results
         t._errors = errors
@@ -571,6 +605,12 @@ class Tag:
                 break
             time.sleep(5)
         return remaining
+
+    def delete(self):
+        remaining_tasks = (
+            set(self.tasks) - set(self._results.keys()) - set(self._errors.keys())
+        )
+        api.delete_tasks("/tasks/delete", remaining_tasks)
 
     @property
     def results(self):
