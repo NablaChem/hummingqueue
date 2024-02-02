@@ -121,6 +121,13 @@ def check_stale_jobs(last_run):
     return time.time()
 
 
+def _cores_from_queue_name(queue_name: str):
+    parts = queue_name.split(",")
+    for part in parts:
+        if part.startswith("nc-"):
+            return int(part.split("-")[1])
+
+
 def update_stats(last_update: float):
     now = time.time()
     unixminute_now = int(now / 60)
@@ -130,15 +137,19 @@ def update_stats(last_update: float):
         return last_update
 
     workers = Worker.all(connection=auth.redis)
-    nworkers = len(workers)
     njobs = auth.db.tasks.count_documents({"status": {"$in": ["pending", "queued"]}})
-    nrunning = len([_ for _ in workers if _.state == "busy"])
+    ncores = [_cores_from_queue_name(_.queues[0]) for _ in workers]
+    states = [_.state for _ in workers]
+    tasks_running = len([_ for _ in workers if _.state == "busy"])
+    cores_used = sum([cores for cores, state in zip(ncores, states) if state == "busy"])
+    cores_available = sum(ncores)
+
     auth.db.stats.insert_one(
         {
-            "cores_available": nworkers,
-            "cores_used": nrunning,
+            "cores_available": cores_available,
+            "cores_used": cores_used,
             "tasks_queued": njobs,
-            "tasks_running": nrunning,
+            "tasks_running": tasks_running,
             "ts": unixminute_now,
         }
     )
