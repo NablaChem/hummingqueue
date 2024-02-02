@@ -1,16 +1,11 @@
-from multiprocessing.sharedctypes import Value
-from pydantic import BaseModel, Field, constr, root_validator
-from typing import List, Optional
 from fastapi.responses import HTMLResponse
 import threading
-import inspect
-from . import helpers
-from . import auth
 from . import maintenance
+from routers import security
 
 counter = 0
 
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI
 
 app = FastAPI(
     docs_url=None,
@@ -27,11 +22,8 @@ routes = ["compute", "communication", "security"]
 for route in routes:
     module = __import__(f"app.routers.{route}", fromlist=["app"])
 
-    # for objname, obj in inspect.getmembers(module, inspect.isclass):
-    #    if issubclass(obj, BaseModel):
-    #        helpers.build_schema_example(obj)
-
     app.include_router(module.app)
+app.version = str(security.VERSION)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

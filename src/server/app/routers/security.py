@@ -1,19 +1,16 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
-import hashlib
 import base64
 import time
-import uuid
 import nacl
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 
-from .. import helpers
 from .. import auth
 
 app = APIRouter()
 
-VERSION = None
+with open("app/VERSION", "r") as f:
+    VERSION = f.read().strip()
 
 
 @app.get(
@@ -30,9 +27,6 @@ def auth_challenge():
     tags=["security"],
 )
 def version():
-    if VERSION is None:
-        with open("app/VERSION", "r") as f:
-            VERSION = f.read().strip()
     return {"version": VERSION}
 
 
