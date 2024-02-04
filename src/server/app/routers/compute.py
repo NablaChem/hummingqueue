@@ -1,18 +1,16 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
+from typing import List, Dict
 import rq
 import re
 import base64
 import time
 import uuid
 import json
-from fastapi import APIRouter, Request, HTTPException, status
+from fastapi import APIRouter, HTTPException, status
 from nacl.signing import VerifyKey
 from pydantic import BaseModel, Field
 
-from .. import helpers
 from .. import auth
-from .. import maintenance
 
 app = APIRouter()
 
@@ -177,15 +175,6 @@ class TasksDelete(BaseModel):
 @app.post("/tasks/delete", tags=["compute"])
 def tasks_delete(body: TasksDelete):
     verify_challenge(body.challenge)
-    # rq
-    for rqid in maintenance.redis_conn.hmget("id2id", existing_ids):
-        if rqid is None:
-            continue
-
-        job = rq.job.Job.fetch(rqid, connection=maintenance.redis_conn)
-        job.cancel()
-        job.delete()
-    maintenance.redis_conn.hdel("id2id", existing_ids)
 
     # mongodb
     logentries = []
@@ -193,17 +182,34 @@ def tasks_delete(body: TasksDelete):
         "id": {"$in": body.delete},
         "status": {"$in": ["pending", "queued"]},
     }
+
     existing = auth.db.tasks.find(to_be_deleted)
     now = time.time()
+    existing_ids = []
     for task in existing:
         logentries.append({"event": "task/delete", "id": task["id"], "ts": now})
-    existing_ids = [_["id"] for _ in existing]
+        existing_ids.append(task["id"])
     auth.db.tasks.update_many(to_be_deleted, {"$set": {"status": "deleted"}})
     auth.db.tasks.update_many(
         to_be_deleted, {"$unset": {"error": "", "result": "", "call": ""}}
     )
     if len(logentries) > 0:
         auth.db.logs.insert_many(logentries)
+
+    # rq
+    if len(existing_ids) > 0:
+        for rqid in auth.redis.hmget("id2id", existing_ids):
+            if rqid is None:
+                continue
+
+            # Might have been terminated in the meantime
+            try:
+                job = rq.job.Job.fetch(rqid.decode("ascii"), connection=auth.redis)
+                job.cancel()
+                job.delete()
+            except rq.exceptions.NoSuchJobError:
+                pass
+        auth.redis.hdel("id2id", *existing_ids)
 
     return existing_ids
 
@@ -357,12 +363,15 @@ def inspect_tags():
     results = []
     for stats in tags.values():
         # incomplete or recent
-        if (
-            stats["pending"] > 0
-            or stats["queued"] > 0
-            or unixminute_now - stats["updated"] < 7 * 24 * 60 * 60
-        ):
-            results.append(stats)
+        try:
+            if (
+                stats["pending"] > 0
+                or stats["queued"] > 0
+                or unixminute_now * 60 - stats["updated"] < 7 * 24 * 60 * 60
+            ):
+                results.append(stats)
+        except:
+            continue
     return results
 
 

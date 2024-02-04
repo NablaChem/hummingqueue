@@ -9,3 +9,5 @@ cookieSecret = "cookie"
 gatherUsageStats = false
 serverAddress = "queue.localhost.nablachem.org"
 
+[theme]
+primaryColor="#1F3664"

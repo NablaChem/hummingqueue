@@ -130,6 +130,14 @@ class API:
         except:
             raise ValueError("Cannot submit signature. Is the admin key correct?")
 
+    def ping(self):
+        self._build_box()
+        try:
+            response = self._get("/ping").content.decode("ascii")
+        except:
+            return False
+        return response == "pong"
+
     def _clean_instance(self, instance):
         self._verify = True
         if instance.endswith("hmq.localhost.nablachem.org"):
@@ -172,6 +180,7 @@ class API:
                 f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq",
                 DeprecationWarning,
             )
+        return case
 
     def _build_box(self):
         if self._box is None:
@@ -365,12 +374,16 @@ class API:
         return uuids
 
     def find_tasks(self, tag: str):
-        payload = {"tag": tag}
+        payload = {"tag": tag, "challenge": self._encrypt(str(time.time()), raw=True)}
         tasks = self._post("/tasks/find", payload)
         return tasks
 
     def delete_tasks(self, tasks: list[str]):
-        payload = {"delete": tasks}
+        payload = {
+            "delete": tasks,
+            "challenge": self._encrypt(str(time.time()), raw=True),
+        }
+        print(payload)
         deleted = self._post("/tasks/delete", payload)
         return deleted
 
@@ -610,7 +623,7 @@ class Tag:
         remaining_tasks = (
             set(self.tasks) - set(self._results.keys()) - set(self._errors.keys())
         )
-        api.delete_tasks("/tasks/delete", remaining_tasks)
+        api.delete_tasks(list(remaining_tasks))
 
     @property
     def results(self):
@@ -645,7 +658,11 @@ def task(func):
     def wrapper(*args, **kwargs):
         func._calls.append((args, kwargs))
 
-    def submit(tag=None, ncores=1, datacenters: str = None, packages=[]):
+    def submit(tag=None, ncores=1, datacenters: str = None, packages=[], quiet=False):
+        if not api.ping():
+            print("Server is not reachable.")
+            return
+
         # register function with server
         callable = cloudpickle.dumps(func)
 
@@ -655,8 +672,14 @@ def task(func):
         }
 
         digest = hashlib.sha256(callable).hexdigest()
+        if not quiet:
+            print(f"Registering function with server: {digest}")
+
         if not api.register_function(remote_function, digest):
             raise ValueError("Could not register function with server.")
+
+        if not quiet:
+            print(f"Sending {len(func._calls)} tasks.")
 
         # send calls to server
         tag = Tag(func.__name__)
@@ -668,6 +691,7 @@ def task(func):
             api.submit_tasks(tag.name, digest, func._calls, ncores, datacenters)
         )
         func._calls = []
+        print(f"Completed tag: {tag.name}")
         return tag
 
     wrapper.submit = submit

@@ -138,7 +138,12 @@ def update_stats(last_update: float):
 
     workers = Worker.all(connection=auth.redis)
     njobs = auth.db.tasks.count_documents({"status": {"$in": ["pending", "queued"]}})
-    ncores = [_cores_from_queue_name(_.queues[0]) for _ in workers]
+
+    # workers.queues cannot deal with commas in queue names
+    ncores = [
+        _cores_from_queue_name(auth.redis.hmget(_.key, "queues")[0].decode("ascii"))
+        for _ in workers
+    ]
     states = [_.state for _ in workers]
     tasks_running = len([_ for _ in workers if _.state == "busy"])
     cores_used = sum([cores for cores, state in zip(ncores, states) if state == "busy"])
@@ -156,35 +161,30 @@ def update_stats(last_update: float):
 
     # track tags
     tagdetails = auth.db.tasks.aggregate(
-        {
-            "_id": {"tag": "$tag", "ncores": "$ncores", "status": "$status"},
-            "jobcount": {"$sum": 1},
-            "ncores": {"$first": "$ncores"},
-            "tag": {"$first": "$tag"},
-            "status": {"$first": "$status"},
-            "totalduration": {"$sum": "$duration"},
-        }
-    )
-    tagtimes = auth.db.tasks.aggregate(
-        {
-            "_id": {"tag": "$tag"},
-            "received": {"$min": "$received"},
-            "updated": {"$max": "$done"},
-            "tag": {"$first": "$tag"},
-        }
+        [
+            {
+                "$group": {
+                    "_id": {"tag": "$tag", "ncores": "$ncores", "status": "$status"},
+                    "jobcount": {"$sum": 1},
+                    "ncores": {"$first": "$ncores"},
+                    "tag": {"$first": "$tag"},
+                    "status": {"$first": "$status"},
+                    "totalduration": {"$sum": "$duration"},
+                    "received": {"$min": "$received"},
+                    "updated": {"$max": "$done"},
+                }
+            }
+        ]
     )
 
     tags = {}
     for line in tagdetails:
         tag = line["tag"]
+        if line["updated"] is None:
+            updated = line["received"]
+        else:
+            updated = line["updated"]
         if tag not in tags:
-            received = 0
-            updated = 0
-            for t in tagtimes:
-                if t["tag"] == tag:
-                    received = t["received"]
-                    updated = t["updated"]
-                    break
             tags[tag] = {
                 "tag": tag,
                 "queued": 0,
@@ -192,28 +192,29 @@ def update_stats(last_update: float):
                 "completed": 0,
                 "failed": 0,
                 "deleted": 0,
-                "corehours": 0,
-                "duration": 0,
-                "received": received,
+                "computetime": 0,
+                "received": line["received"],
                 "updated": updated,
-                "ts": unixminute_now,
+                "ts": now,
             }
-            if line["status"] in [
-                "pending",
-                "queued",
-                "deleted",
-                "completed",
-                "error",
-            ]:
-                status = line["status"]
-                if status == "error":
-                    status = "failed"
-                tags[tag][status] = line["jobcount"]
-            else:
-                continue
-            tags[tag]["corehours"] += line["ncores"] * line["totalduration"]
+        tags[tag]["received"] = min(tags[tag]["received"], line["received"])
+        tags[tag]["updated"] = max(tags[tag]["updated"], updated)
+        if line["status"] in [
+            "pending",
+            "queued",
+            "deleted",
+            "completed",
+            "error",
+        ]:
+            status = line["status"]
+            if status == "error":
+                status = "failed"
+            tags[tag][status] = line["jobcount"]
+        else:
+            continue
+        tags[tag]["computetime"] += line["ncores"] * line["totalduration"]
     auth.db.stats_tags.insert_many([_ for _ in tags.values()])
-    auth.db.stats_tags.delete_many({"ts": {"$lt": unixminute_now}})
+    auth.db.stats_tags.delete_many({"ts": {"$lt": now}})
     return now
 
 
