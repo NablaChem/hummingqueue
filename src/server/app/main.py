@@ -1,7 +1,7 @@
 from fastapi.responses import HTMLResponse
 import threading
 from . import maintenance
-from routers import security
+from .routers import security
 
 counter = 0
 
