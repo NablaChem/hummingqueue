@@ -139,21 +139,22 @@ def T2(x):
 df.received = df.received.apply(T)
 df.updated = df.updated.apply(T)
 df.computetime = df.computetime.apply(T2)
-st.dataframe(
-    df,
-    use_container_width=True,
-    hide_index=True,
-    column_config={
-        "progress": st.column_config.ProgressColumn(
-            "Progress",
-            help="Tag completion",
-            format="%d%%",
-            min_value=0,
-            max_value=100,
-        ),
-    },
-    column_order="tag total progress completed failed queued pending deleted computetime received updated".split(),
-)
+with queue:
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "progress": st.column_config.ProgressColumn(
+                "Progress",
+                help="Tag completion",
+                format="%d%%",
+                min_value=0,
+                max_value=100,
+            ),
+        },
+        column_order="tag total progress completed failed queued pending deleted computetime received updated".split(),
+    )
 
 
 # datacenters
