@@ -1,6 +1,8 @@
 from rq import Queue, Worker
 import time
 from . import auth
+from rq.job import Job
+import rq
 
 
 def refill_redis(njobs: int):
@@ -102,8 +104,34 @@ def check_stale_jobs(last_run):
     time.sleep(5)
 
     # list of tasks in redis
-    redis = set([_.decode("ascii") for _ in auth.redis.hgetall("id2id").keys()])
-    time.sleep(5)
+    hmq2rq = {
+        _[0].decode("ascii"): _[1].decode("ascii")
+        for _ in auth.redis.hgetall("id2id").items()
+    }
+    redis = set(hmq2rq.keys())
+
+    # remove failed ones so they get requeued
+    to_be_removed = []
+    for hmqtask in redis:
+        try:
+            j = Job.fetch(hmq2rq[hmqtask], connection=auth.redis)
+        except rq.exceptions.NoSuchJobError:
+            to_be_removed.append(hmqtask)
+            try:
+                auth.redis.hdel("id2id", hmqtask)
+            except:
+                continue
+            continue
+        if j.is_failed:
+            j.delete()
+            to_be_removed.append(hmqtask)
+            try:
+                auth.redis.hdel("id2id", hmqtask)
+            except:
+                continue
+    for hmqtask in to_be_removed:
+        redis.remove(hmqtask)
+    time.sleep(1)
 
     # list of queued tasks again
     q2 = set([task["id"] for task in auth.db.tasks.find({"status": "queued"})])
