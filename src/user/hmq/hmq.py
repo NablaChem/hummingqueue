@@ -53,6 +53,7 @@ class API:
     def __init__(self):
         self._box = None
         self._url = None
+        self._challenge_time = 0
 
     def setup(self, url: str):
         config = configparser.ConfigParser()
@@ -266,7 +267,7 @@ class API:
         payload = {
             "datacenter": datacenter,
             "version": python_version,
-            "challenge": self._encrypt(str(time.time()), raw=True),
+            "challenge": self._get_challenge(),
         }
         requirements = self._post("/queue/requirements", payload)
 
@@ -323,7 +324,7 @@ class API:
                 self._encrypt(_, raw=True) for _ in remote_function["packages"]
             ],
             "packages_hashes": [self._hash(_) for _ in remote_function["packages"]],
-            "challenge": self._encrypt(str(time.time()), raw=True),
+            "challenge": self._get_challenge(),
         }
         result = self._post("/function/register", payload)
         try:
@@ -337,7 +338,7 @@ class API:
     def retrieve_results(self, tasks: list[str]):
         payload = {
             "tasks": tasks,
-            "challenge": self._encrypt(str(time.time()), raw=True),
+            "challenge": self._get_challenge(),
         }
         results = {}
         for task, result in self._post("/results/retrieve", payload).items():
@@ -368,20 +369,20 @@ class API:
             "digest": calldigest,
             "ncores": ncores,
             "datacenters": datacenters,
-            "challenge": self._encrypt(str(time.time()), raw=True),
+            "challenge": self._get_challenge(),
         }
         uuids = self._post("/tasks/submit", payload)
         return uuids
 
     def find_tasks(self, tag: str):
-        payload = {"tag": tag, "challenge": self._encrypt(str(time.time()), raw=True)}
+        payload = {"tag": tag, "challenge": self._get_challenge()}
         tasks = self._post("/tasks/find", payload)
         return tasks
 
     def delete_tasks(self, tasks: list[str]):
         payload = {
             "delete": tasks,
-            "challenge": self._encrypt(str(time.time()), raw=True),
+            "challenge": self._get_challenge(),
         }
         print(payload)
         deleted = self._post("/tasks/delete", payload)
@@ -433,7 +434,6 @@ class API:
         # build list of packages
         packages = {}
         for pyver, packagelist in packagelists.items():
-            thisver = []
             with open(packagelist, "r") as fh:
                 ps = fh.read().splitlines()
 
@@ -441,15 +441,16 @@ class API:
 
         payload = {
             "datacenter": datacenter,
-            "challenge": self._encrypt(str(time.time()), raw=True),
+            "challenge": self._get_challenge(),
             "packages": packages,
         }
         return self._post("/queue/haswork", payload)
 
     @staticmethod
     def _worker(hmqid, call, function, secret, baseurl, verify):
-        def get_challenge(box):
-            payload = str(time.time())
+        def get_challenge(box, baseurl, verify):
+            challenge = requests.get(f"{baseurl}/auth/challenge", verify=verify)
+            payload = str(challenge["challenge"])
             return base64.b64encode(box.encrypt(payload.encode("utf8"))).decode("ascii")
 
         box = SecretBox(secret)
@@ -497,7 +498,10 @@ class API:
             payload["error"] = errormsg
         else:
             payload["result"] = result
-        payload = {"results": [payload], "challenge": get_challenge(box)}
+        payload = {
+            "results": [payload],
+            "challenge": get_challenge(box, baseurl, verify),
+        }
 
         res = requests.post(
             f"{baseurl}/results/store",
@@ -505,8 +509,19 @@ class API:
             verify=verify,
         )
 
-    def _get_challenge(self):
-        return str(time.time())
+    def _get_challenge(self) -> str:
+        """Uses the server provided challenge for up to ten seconds.
+
+        Returns
+        -------
+        str
+            Challenge
+        """
+        if time.time() - self._challenge_time > 10:
+            response = str(self._get("/auth/challenge").json()["challenge"])
+            self._challenge = self._encrypt(response, raw=True)
+            self._challenge_time = time.time()
+        return self._challenge
 
 
 api = API()
