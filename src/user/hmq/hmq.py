@@ -15,6 +15,8 @@ import hashlib
 import configparser
 import warnings
 import functools
+import numpy as np
+import pandas as pd
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
@@ -242,7 +244,7 @@ class API:
         if raw:
             message = obj.encode("utf8")
         else:
-            message = json.dumps(obj).encode("utf8")
+            message = json.dumps(obj, cls=AutomaticEncoder).encode("utf8")
         message = base64.b64encode(self._box.encrypt(message)).decode("ascii")
         return message
 
@@ -465,7 +467,7 @@ class API:
         try:
             result = functions[function](*args, **kwargs)
             result = base64.b64encode(
-                box.encrypt(json.dumps(result).encode("utf8"))
+                box.encrypt(json.dumps(result, cls=AutomaticEncoder).encode("utf8"))
             ).decode("ascii")
             errormsg = None
         except:
@@ -522,6 +524,26 @@ class API:
             self._challenge = self._encrypt(response, raw=True)
             self._challenge_time = time.time()
         return self._challenge
+
+
+class AutomaticEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            warnings.warn("Implicit conversion from numpy.integer to int.")
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            warnings.warn("Implicit conversion from numpy.floating to float.")
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            warnings.warn("Implicit conversion from numpy.ndarray to list.")
+            return obj.tolist()
+        elif isinstance(obj, pd.DataFrame):
+            warnings.warn("Implicit conversion from pandas.DataFrame to list.")
+            return obj.to_dict(orient="list")
+        elif isinstance(obj, pd.Series):
+            warnings.warn("Implicit conversion from pandas.Series to list.")
+            return obj.to_list()
+        return json.JSONEncoder.default(self, obj)
 
 
 api = API()

@@ -7,3 +7,5 @@ cloudpickle
 tqdm
 rq
 sentry_sdk
+numpy
+pandas

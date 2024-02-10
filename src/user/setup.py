@@ -18,6 +18,8 @@ setup(
         "tqdm",
         "rq",
         "toml",
+        "numpy",
+        "pandas",
     ],
     entry_points={
         "console_scripts": ["hmq=hmq:cli"],
