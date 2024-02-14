@@ -146,6 +146,21 @@ def check_stale_jobs(last_run):
         )
         auth.db.logs.insert_many(logentries)
 
+    # drop those which have been deleted but are still in the queue
+    should_have_been_deleted = {
+        "id": {"$in": list(redis)},
+        "status": "deleted",
+    }
+    for task in auth.db.tasks.find(should_have_been_deleted):
+        tid = task["id"]
+        try:
+            job = rq.job.Job.fetch(hmq2rq[tid], connection=auth.redis)
+            job.cancel()
+            job.delete()
+        except rq.exceptions.NoSuchJobError:
+            pass
+        auth.redis.hdel("id2id", tid)
+
     return time.time()
 
 
