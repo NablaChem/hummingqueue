@@ -451,7 +451,7 @@ class API:
     @staticmethod
     def _worker(hmqid, call, function, secret, baseurl, verify):
         def get_challenge(box, baseurl, verify):
-            challenge = requests.get(f"{baseurl}/auth/challenge", verify=verify)
+            challenge = requests.get(f"{baseurl}/auth/challenge", verify=verify).json()
             payload = str(challenge["challenge"])
             return base64.b64encode(box.encrypt(payload.encode("utf8"))).decode("ascii")
 
