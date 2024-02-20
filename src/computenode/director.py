@@ -5,6 +5,7 @@ import glob
 import time
 import toml
 import sys
+import redis
 import os
 from string import Template
 
@@ -75,6 +76,18 @@ def main():
         if not os.path.exists(config["datacenter"]["binaries"] + "/" + binary):
             print(f"Error: {binary} not found in {config['datacenter']['binaries']}")
             sys.exit(1)
+
+    # check redis is reachable
+    r = redis.StrictRedis(
+        host=config["server"]["redis_host"],
+        port=config["server"]["redis_port"],
+        password=hmq.api._get_message_secret(),
+    )
+    try:
+        r.ping()
+    except:
+        print("Error: redis not reachable with the given credentials.")
+        sys.exit(1)
 
     # request jobs / run heartbeat
     with open(f"{sys.argv[1]}/hmq.job") as fh:

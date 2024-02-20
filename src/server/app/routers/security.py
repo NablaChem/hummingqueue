@@ -38,7 +38,6 @@ class UserAdd(BaseModel):
     )
     username: str = Field(..., description="Username")
     compute: str = Field(..., description="Compute secret encrypted for this user.")
-    message: str = Field(..., description="Message secret encrypted for this user.")
 
 
 @app.post("/user/add", tags=["security"])
@@ -60,7 +59,6 @@ def user_add(body: UserAdd):
             "signature": body.signature,
             "username": body.username,
             "compute": body.compute,
-            "message": body.message,
         }
     )
     return {"status": "ok"}
@@ -80,7 +78,6 @@ def user_secrets(body: UserSecrets):
 
     return {
         "compute": entry["compute"],
-        "message": entry["message"],
         "admin": auth.admin_signature.encode(
             encoder=nacl.encoding.Base64Encoder
         ).decode("ascii"),

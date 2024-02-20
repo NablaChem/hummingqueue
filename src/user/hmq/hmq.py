@@ -1,5 +1,3 @@
-import dns.resolver
-import dns.message
 import uuid
 import sys
 import traceback
@@ -116,9 +114,6 @@ class API:
         encrypted_secret = base64.b64encode(box.encrypt(self._computesecret)).decode(
             "ascii"
         )
-        encrypted_message = base64.b64encode(
-            box.encrypt(self._messagekey.encode("utf8"))
-        ).decode("ascii")
 
         payload = {
             "sign": verify_key,
@@ -126,7 +121,6 @@ class API:
             "signature": b64_signature,
             "username": username,
             "compute": encrypted_secret,
-            "message": encrypted_message,
         }
         try:
             response = self._post("/user/add", payload)
@@ -159,7 +153,7 @@ class API:
         if instance.startswith("https://") or instance.startswith("http://"):
             cases.append(instance)
         else:
-            for schema in "https http".split():
+            for schema in "http https".split():
                 cases.append(f"{schema}://{instance}")
 
         # test if instance is reachable
@@ -207,7 +201,7 @@ class API:
                     config["server"]["encrypt"], encoder=nacl.encoding.Base64Encoder
                 )
                 userbox = SealedBox(user_encryption_key)
-                for item in "compute message".split():
+                for item in "compute".split():
                     self._computesecret = userbox.decrypt(
                         base64.b64decode(response[item])
                     )
@@ -215,9 +209,6 @@ class API:
                         self._computesecret
                     ).decode("ascii")
                 config["server"]["admin"] = response["admin"]
-                config["server"]["message"] = base64.b64decode(
-                    config["server"]["message"]
-                ).decode("ascii")
 
                 # save result
                 with open(
@@ -227,16 +218,11 @@ class API:
 
                 # finally load compute secret
                 self._computesecret = base64.b64decode(config["server"]["compute"])
-            self._messagekey = config["server"]["message"]
             try:
                 self._adminkey = base64.b64decode(config["server"]["admin"])
             except:
                 pass
             self._box = SecretBox(self._computesecret)
-
-    def _get_message_secret(self):
-        self._build_box()
-        return self._messagekey
 
     def _encrypt(self, obj, raw=False):
         self._build_box()
@@ -748,106 +734,6 @@ class CachedWorker(Worker):
         ret = super().execute_job(job, queue)
         self.connection.hdel("id2id", job.kwargs["hmqid"])
         return ret
-
-
-class OverrideResolver(dns.resolver.Resolver):
-    def __init__(self, overrides):
-        self._overrides = overrides
-
-    def _build_message(self, qname):
-        return dns.message.from_text(
-            f"""id 12345
-opcode QUERY
-rcode NOERROR
-flags QR RD RA
-;QUESTION
-{qname}. IN A
-;ANSWER
-{qname}. 37478 IN A {self._overrides[qname]}"""
-        )
-
-    def resolve(self, *args, **kwargs):
-        if "qname" in kwargs:
-            qname = kwargs["qname"]
-        else:
-            qname = args[0]
-        if qname in self._overrides:
-            return dns.resolver.Answer(
-                qname,
-                dns.rdatatype.RdataType.A,
-                dns.rdataclass.RdataClass.IN,
-                self._build_message(qname),
-            )
-        else:
-            return dns.resolver.resolve(qname)
-
-
-def use_tunnel(at: str, baseurl: str, sentry_dsn: str = None):
-    redirects = {}
-    if sentry_dsn is not None:
-        url = urlparse(sentry_dsn)
-        sentry_host = url.hostname
-        sentry_ip = socket.gethostbyname(sentry_host)
-        redirects[sentry_host] = sentry_ip
-
-    tunnels = {f"hmq.{baseurl}": at, f"redis.{baseurl}": at}
-    if sentry_dsn is not None:
-        tunnels[sentry_host] = at
-    over = OverrideResolver(tunnels)
-    over.reset()
-    dns.resolver.override_system_resolver(over)
-    return redirects
-
-
-def generate_traefik_config(from_ip, from_port, to_ip, to_port, redirects={}):
-    # build per-host redirects
-    counter = 0
-    routers = ""
-    services = ""
-    for host, ip in redirects.items():
-        routers += f"""
-    routerhost{counter}:
-      entryPoints:
-        - websecure
-      service: forward{counter}
-      rule: "HostSNI(`{host}`)"
-      tls:
-        passthrough: true
-"""
-        services += f"""
-    forward{counter}:
-      loadBalancer:
-        servers:
-          - address: {ip}:443
-"""
-        counter += 1
-
-    return f"""providers:
-  file:
-    filename: traefik.yml
-
-entryPoints:
-  websecure:
-    address: "{from_ip}:{from_port}"
-
-tcp:
-  routers:
-{routers}
-    router4websecure:
-      entryPoints:
-        - websecure
-      service: websecure-forward
-      rule: "HostSNI(`*`)"
-      tls:
-         passthrough: true
-
-  services:
-    websecure-forward:
-      loadBalancer:
-        servers:
-          - address: "{to_ip}:{to_port}" 
-{services}
-"""
 
 
 def cli():

@@ -7,12 +7,6 @@ services:
   mongo:
     volumes:
      - "prod-mongodb:/data/db"
-  # minio:
-  #   volumes:
-  #     - "prod-minio:/data"
-  redis:
-    volumes:
-      - "prod-redis:/data"
 
   traefik:
     env_file:
@@ -37,13 +31,6 @@ services:
       - "traefik.http.routers.traefiksecure.tls.certresolver=letsencrypt"
       - "traefik.http.routers.traefiksecure.tls.domains[0].main=*.${BASEURL}"
 
-  # minio:
-  #   volumes:
-  #     - "prod-minio:/data"
-  #   labels:
-  #     - "traefik.http.routers.miniosecure.tls.certresolver=letsencrypt"
-  #     - "traefik.http.routers.minio-consolesecure.tls.certresolver=letsencrypt"
-
   hmq:
     volumes:
       - "./server/app/:/code/app/"
@@ -56,9 +43,5 @@ services:
 
   
 volumes:
-  prod-minio:
-    external: True
   prod-mongodb:
-    external: True
-  prod-redis:
     external: True
