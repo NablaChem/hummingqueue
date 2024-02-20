@@ -1,13 +1,11 @@
 [server]
 baseurl = "nablachem.org"
-redis_db = 1
-
-[gateway]
-address = "141.51.204.30"
-port = 42424
+redis_host = "141.51.205.42"
+redis_port = "42424"
 
 [datacenter]
 name = "Kassel"
-envs = "/home/users/0026/uk092940/hmq_prod/envs"
-binaries = "/home/users/0026/uk092940/hmq_prod/bin"
-maxjobs = 10
+envs = "/home/groups/nablachem/hmq/envs"
+binaries = "/home/groups/nablachem/hmq/bin"
+tmpdir = "/home/groups/nablachem/hmq/tmp"
+maxjobs = 20

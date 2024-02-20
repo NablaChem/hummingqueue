@@ -1,20 +1,12 @@
 import hmq
 import subprocess
 import shlex
-import socket
 import glob
 import time
 import toml
 import sys
 import os
 from string import Template
-
-# sentry
-import sentry_sdk
-
-sentry_sdk.init(
-    dsn="https://94f2cd3ea02b7eac1a06d8e0f387645d@o4504798970904576.ingest.sentry.io/4506149927190528"
-)
 
 
 def install(config, pyver):
@@ -79,36 +71,10 @@ def main():
         config = toml.load(f)
 
     # verify binaries
-    for binary in ["traefik", "micromamba"]:
+    for binary in ["micromamba"]:
         if not os.path.exists(config["datacenter"]["binaries"] + "/" + binary):
             print(f"Error: {binary} not found in {config['datacenter']['binaries']}")
             sys.exit(1)
-
-    # setup tunnel
-    server_address = socket.gethostbyname(f'hmq.{config["server"]["baseurl"]}')
-    try:
-        sentrydsn = config["sentry"]["computenode"]
-    except:
-        sentrydsn = None
-    redirects = hmq.use_tunnel(
-        config["gateway"]["address"], config["server"]["baseurl"], sentrydsn
-    )
-
-    # generate traefik config
-    filename = config["datacenter"]["tmpdir"] + "/traefik.yml"
-    content = hmq.generate_traefik_config(
-        config["gateway"]["address"],
-        str(config["gateway"]["port"]),
-        server_address,
-        "443",
-        redirects,
-    )
-    with open(filename, "w") as f:
-        f.write(content)
-
-    # run traefik
-    cmd = f"{config['datacenter']['binaries']}/traefik --config traefik.yml"
-    p = subprocess.Popen(shlex.split(cmd), cwd=config["datacenter"]["tmpdir"])
 
     # request jobs / run heartbeat
     with open(f"{sys.argv[1]}/hmq.job") as fh:
@@ -130,8 +96,8 @@ def main():
                 "queues": q["name"],
                 "envs": config["datacenter"]["envs"],
                 "baseurl": config["server"]["baseurl"],
-                "gateway": config["gateway"]["address"],
-                "gatewayport": config["gateway"]["port"],
+                "redis_port": config["server"]["redis_port"],
+                "redis_host": config["server"]["redis_host"],
                 "binaries": config["datacenter"]["binaries"],
             }
             pyvers.append(q["version"])
