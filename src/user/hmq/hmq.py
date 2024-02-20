@@ -418,7 +418,9 @@ class API:
 
             functions[function] = functools.partial(raise_later, hmq_message=msg)
 
-    def has_jobs(self, datacenter, packagelists):
+    def dequeue_tasks(
+        self, datacenter: str, packagelists: dict[str, str], maxtasks: int
+    ):
         # build list of packages
         packages = {}
         for pyver, packagelist in packagelists.items():
@@ -430,9 +432,10 @@ class API:
         payload = {
             "datacenter": datacenter,
             "challenge": self._get_challenge(),
+            "maxtasks": maxtasks,
             "packages": packages,
         }
-        return self._post("/queue/haswork", payload)
+        return self._post("/tasks/dequeue", payload)
 
     @staticmethod
     def _worker(hmqid, call, function, secret, baseurl, verify):

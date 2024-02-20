@@ -1,10 +1,10 @@
 from pydantic import BaseModel, Field
 from typing import List, Dict
-import rq
 import re
 import base64
 import time
 import uuid
+import random
 import json
 from fastapi import APIRouter, HTTPException, status
 from nacl.signing import VerifyKey
@@ -127,12 +127,10 @@ def tasks_submit(body: TaskSubmit):
     taskentries = []
 
     function = auth.db.functions.find_one({"digest": body.function})
-    queues = [
-        f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-{_}'
-        for _ in body.datacenters
-    ]
+    prefix = f'py-{function["major"]}.{function["minor"]}-nc-{body.ncores}-dc-'
+    queues = [f"{prefix}{_}" for _ in body.datacenters]
     if queues == []:
-        queues = [f'py-{function["major"]}.{function["minor"]},nc-{body.ncores},dc-any']
+        queues = [f"{prefix}any"]
 
     now = time.time()
     for call in calls:
@@ -384,14 +382,15 @@ def inspect_usage():
     return ret
 
 
-class QueueHasWork(BaseModel):
+class TasksDequeue(BaseModel):
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
     datacenter: str = Field(..., description="Datacenter checking in.")
     packages: Dict[str, List[str]] = Field(..., description="Installed packages.")
+    maxtasks: int = Field(..., description="Maximum number of tasks to return.")
 
 
-@app.post("/queue/haswork", tags=["statistics"])
-def task_inspect(body: QueueHasWork):
+@app.post("/tasks/dequeue", tags=["compute"])
+def tasks_dequeue(body: TasksDequeue):
     verify_challenge(body.challenge)
 
     # update heartbeat
@@ -402,27 +401,52 @@ def task_inspect(body: QueueHasWork):
     )
 
     # check if there is work
-    qs = rq.Queue.all(connection=auth.redis)
-    regex = r"py-(?P<pythonversion>.+),nc-(?P<numcores>.+),dc-(?P<datacenter>.+)"
+    regex = r"py-(?P<pythonversion>.+)-nc-(?P<numcores>.+)-dc-(?P<datacenter>.+)"
 
-    queues = []
-    for queue in qs:
-        m = re.match(regex, queue.name)
+    tasks = {}
+    remaining = body.maxjobs
+    logentries = []
+    active_queues = [_["queue"] for _ in auth.db.active_queues.find()]
+    random.shuffle(active_queues)
+    for queue in active_queues:
+        m = re.match(regex, queue)
         if m is None:
             continue
         if m.group("datacenter") != body.datacenter and m.group("datacenter") != "any":
             continue
 
-        if queue.count > 0:
-            queues.append(
+        while remaining > 0:
+            task = auth.db.tasks.find_one_and_update(
+                {"status": "pending", "queues": queue},
+                {"$set": {"status": "queued"}},
+                return_document=True,
+            )
+            if task is None:
+                continue
+            if queue not in tasks:
+                tasks[queue] = []
+            tasks[queue].append(
                 {
-                    "version": m.group("pythonversion"),
-                    "numcores": m.group("numcores"),
-                    "name": queue.name,
+                    "call": task["call"],
+                    "function": task["function"],
+                    "hmqid": task["id"],
+                    "job_timeout": "6h",
                 }
             )
+            remaining -= 1
+            logentries.append(
+                {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
+            )
 
-    return queues
+    # remove empty queues
+    for queue in active_queues:
+        if queue not in tasks:
+            auth.db.active_queues.delete_one({"queue": queue})
+
+    if len(logentries) > 0:
+        auth.db.logs.insert_many(logentries)
+
+    return tasks
 
 
 @app.get("/system/status", tags=["statistics"])

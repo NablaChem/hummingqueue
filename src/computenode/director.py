@@ -8,6 +8,9 @@ import sys
 import redis
 import os
 from string import Template
+import rq
+import re
+import random
 
 
 def install(config, pyver):
@@ -49,7 +52,7 @@ done
     os.remove(installfile)
 
 
-def build_packagelists(config):
+def build_packagelists(config) -> dict[str, str]:
     paths = glob.glob(f"{config['datacenter']['envs']}/envs/hmq_*/pkg.list")
     ps = {}
     for path in paths:
@@ -96,29 +99,36 @@ def main():
     while True:
         time.sleep(10)
 
-        aggregates = dict()
         pyvers = []
 
         # get jobs
         packagelists = build_packagelists(config)
-        qs = hmq.api.has_jobs(config["datacenter"]["name"], packagelists)
-        for q in qs:
-            variables = {
-                "pyver": q["version"],
-                "ncores": q["numcores"],
-                "queues": q["name"],
-                "envs": config["datacenter"]["envs"],
-                "baseurl": config["server"]["baseurl"],
-                "redis_port": config["server"]["redis_port"],
-                "redis_host": config["server"]["redis_host"],
-                "binaries": config["datacenter"]["binaries"],
-            }
-            pyvers.append(q["version"])
-            key = f"{q['version']}-{q['numcores']}"
-            if key not in aggregates:
-                aggregates[key] = variables
-            else:
-                aggregates[key]["queues"] += " " + q["name"]
+
+        # count empty slots
+        nslots = 3000
+        # TODO: improve to use rq native methods
+        for queue in r.smembers("rq:queues"):
+            nslots -= r.llen(queue)
+        if nslots <= 0:
+            continue
+
+        qtasks = hmq.api.dequeue_tasks(
+            config["datacenter"]["name"], packagelists, nslots
+        )
+        for queuename, tasks in qtasks:
+            queue = rq.Queue(queuename, connection=r)
+            regex = (
+                r"py-(?P<pythonversion>.+)-nc-(?P<numcores>.+)-dc-(?P<datacenter>.+)"
+            )
+            m = re.match(regex, queue)
+            if m is None:
+                continue
+            version = m.group("pythonversion")
+            numcores = m.group("numcores")
+
+            for task in tasks:
+                rq_job = queue.enqueue("hmq.unwrap", **task)
+                r.hset("hmq2rq", task["hmqid"], rq_job.id)
 
         # install python versions
         for pyver in set(pyvers):
@@ -139,11 +149,32 @@ def main():
         cmd = f"squeue -u {os.getenv('USER', '')} "
         output = subprocess.check_output(shlex.split(cmd))
         njobs = len(output.splitlines()) - 1
-        if njobs >= config["datacenter"]["maxjobs"]:
-            continue
 
-        # submit jobs
-        for variables in aggregates.values():
+        # submit jobs for random populated queues
+        active_queues = [_.replace("rq:queue:", "") for _ in r.smembers("rq:queues")]
+        while njobs < config["datacenter"]["maxjobs"]:
+            if len(active_queues) == 0:
+                break
+
+            queuename = random.choice(active_queues)
+
+            m = re.match(regex, queue)
+            if m is None:
+                continue
+            version = m.group("pythonversion")
+            numcores = m.group("numcores")
+
+            variables = {
+                "pyver": version,
+                "ncores": numcores,
+                "queues": queuename,
+                "envs": config["datacenter"]["envs"],
+                "baseurl": config["server"]["baseurl"],
+                "redis_port": config["server"]["redis_port"],
+                "redis_host": config["server"]["redis_host"],
+                "binaries": config["datacenter"]["binaries"],
+            }
+
             with open(f"{config['datacenter']['tmpdir']}/hmq.job", "w") as fh:
                 content = Template(templatestr).substitute(variables)
                 fh.write(content)
@@ -152,8 +183,6 @@ def main():
                 shlex.split("sbatch hmq.job"), cwd=config["datacenter"]["tmpdir"]
             )
             njobs += 1
-            if njobs >= config["datacenter"]["maxjobs"]:
-                break
 
 
 if __name__ == "__main__":

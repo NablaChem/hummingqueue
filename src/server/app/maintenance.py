@@ -28,48 +28,6 @@ def refill_redis(njobs: int):
             any_packages[pyver] = any_packages[pyver].intersection(set(package))
     active_datacenters["any"] = any_packages
 
-    # extend queue
-    for queue in auth.db.active_queues.find():
-        tasks = []
-        logentries = []
-
-        name = queue["queue"]
-        q = Queue(name, connection=auth.redis)
-
-        seen_at_least_one = False
-        remaining = njobs - len(q)
-        for _ in range(remaining):
-            task = auth.db.tasks.find_one_and_update(
-                {"status": "pending", "queues": name},
-                {"$set": {"status": "queued"}},
-                return_document=True,
-            )
-            if task is None:
-                break
-            seen_at_least_one = True
-            tasks.append(
-                {
-                    "call": task["call"],
-                    "function": task["function"],
-                    "hmqid": task["id"],
-                    "job_timeout": "6h",
-                }
-            )
-            logentries.append(
-                {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
-            )
-
-        if remaining > 0 and not seen_at_least_one:
-            auth.db.active_queues.delete_one({"queue": name})
-
-        if len(logentries) > 0:
-            auth.db.logs.insert_many(logentries)
-            idmapping = {}
-            for task in tasks:
-                job = q.enqueue("hmq.unwrap", **task)
-                idmapping[task["hmqid"]] = job.id
-            auth.redis.hset("id2id", mapping=idmapping)
-
 
 def check_active_queues(last_run):
     """Ensures all relevant queues are in the active_queues collection."""
