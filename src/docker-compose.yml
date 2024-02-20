@@ -77,9 +77,7 @@ services:
       
     environment:
       - "MONGODB_CONNSTR=mongodb://${MONGO_ROOT_USER}:${MONGO_ROOT_PASS}@mongo/hq"
-      - "API_TOKEN=${API_TOKEN}"
       - "ADMIN_SIGN=${ADMIN_SIGN}"
-      - "MESSAGE_SECRET=${MESSAGE_SECRET}"
 
   dash:
     build:

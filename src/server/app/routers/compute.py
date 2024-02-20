@@ -15,17 +15,23 @@ from .. import auth
 app = APIRouter()
 
 
-def verify_challenge(encrypted_challenge):
-    try:
-        decrypted = auth.encryption_key.decrypt(
-            base64.b64decode(encrypted_challenge)
-        ).decode("ascii")
-    except:
+def verify_challenge(signed_challenge):
+    for user in auth.db.users.find():
+        verify_key = VerifyKey(base64.b64decode(user["sign"]))
+        try:
+            signed = verify_key.verify(
+                base64.b64decode(signed_challenge.encode("ascii"))
+            ).decode("ascii")
+            signed_time = float(signed.decode("ascii"))
+            break
+        except:
+            continue
+    else:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid compute key for challenge",
         )
-    if time.time() - float(decrypted) > 60:
+    if time.time() - signed_time > 60:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid challenge"
         )

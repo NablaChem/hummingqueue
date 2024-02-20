@@ -509,8 +509,11 @@ class API:
             Challenge
         """
         if time.time() - self._challenge_time > 10:
-            response = str(self._get("/auth/challenge").json()["challenge"])
-            self._challenge = self._encrypt(response, raw=True)
+            response = str(int(self._get("/auth/challenge").json()["challenge"]))
+
+            self._challenge = self._signature.sign(
+                response.encode("ascii"), encoder=nacl.encoding.Base64Encoder
+            ).decode("ascii")
             self._challenge_time = time.time()
         return self._challenge
 
