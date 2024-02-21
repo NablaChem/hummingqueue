@@ -8,6 +8,7 @@ import random
 import json
 from fastapi import APIRouter, HTTPException, status
 from nacl.signing import VerifyKey
+import nacl
 from pydantic import BaseModel, Field
 
 from .. import auth
@@ -22,10 +23,16 @@ def verify_challenge(signed_challenge):
             signed = verify_key.verify(
                 base64.b64decode(signed_challenge.encode("ascii"))
             ).decode("ascii")
-            signed_time = float(signed.decode("ascii"))
-            break
-        except:
+        except nacl.exceptions.BadSignatureError:
             continue
+        try:
+            signed_time = float(signed)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Challenge is not a signed timestamp.",
+            )
+        break
     else:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -33,7 +40,7 @@ def verify_challenge(signed_challenge):
         )
     if time.time() - signed_time > 60:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid challenge"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Old challenge"
         )
 
 
