@@ -13,56 +13,6 @@ import re
 import random
 
 
-def install(config, pyver):
-    installfile = f"{config['datacenter']['tmpdir']}/install.sh"
-    with open(installfile, "w") as fh:
-        fh.write(
-            f"""#!/bin/bash
-export MAMBA_ROOT_PREFIX={config["datacenter"]["envs"]}
-eval "$({config["datacenter"]["binaries"]}/micromamba shell hook --shell bash )"
-micromamba create -n hmq_{pyver}
-micromamba activate hmq_{pyver}
-micromamba install python={pyver} -c conda-forge -y
-pip install hmq
-"""
-        )
-    subprocess.run(shlex.split(f"chmod +x {installfile}"))
-    subprocess.run(shlex.split(installfile))
-    os.remove(installfile)
-
-
-def install_packages(config, pyver, missing):
-    installlist = f"{config['datacenter']['envs']}/envs/hmq_{pyver}/pkg.list"
-    installfile = f"{config['datacenter']['tmpdir']}/install.sh"
-    with open(installfile, "w") as fh:
-        fh.write(
-            f"""#!/bin/bash
-export MAMBA_ROOT_PREFIX={config["datacenter"]["envs"]}
-eval "$({config["datacenter"]["binaries"]}/micromamba shell hook --shell bash )"
-micromamba activate hmq_{pyver}
-for package in {" ".join(missing)};
-do
-    pip install $package;
-    echo $package >> {installlist};
-done
-"""
-        )
-    subprocess.run(shlex.split(f"chmod +x {installfile}"))
-    subprocess.run(shlex.split(installfile))
-    os.remove(installfile)
-
-
-def build_packagelists(config) -> dict[str, str]:
-    paths = glob.glob(f"{config['datacenter']['envs']}/envs/hmq_*/pkg.list")
-    ps = {}
-    for path in paths:
-        pyver = path.split("/")[-2].split("_")[-1]
-        if pyver == "base":
-            continue
-        ps[pyver] = path
-    return ps
-
-
 def parse_queue_name(queue: str) -> tuple[str, str]:
     regex = r"py-(?P<pythonversion>.+)-nc-(?P<numcores>.+)-dc-(?P<datacenter>.+)"
     m = re.match(regex, queue)
@@ -73,7 +23,79 @@ def parse_queue_name(queue: str) -> tuple[str, str]:
     return version, numcores
 
 
-class SlurmDirector:
+class DependencyManager:
+    def __init__(self, config):
+        self._config = config
+
+    @property
+    def packagelists(self) -> dict[str, str]:
+        paths = glob.glob(f"{self._config['datacenter']['envs']}/envs/hmq_*/pkg.list")
+        ps = {}
+        for path in paths:
+            pyver = path.split("/")[-2].split("_")[-1]
+            if pyver == "prod":
+                continue
+            ps[pyver] = path
+        return ps
+
+    def _install_env(self, pyver):
+        installfile = f"{self._config['datacenter']['tmpdir']}/install.sh"
+        with open(installfile, "w") as fh:
+            fh.write(
+                f"""#!/bin/bash
+    export MAMBA_ROOT_PREFIX={self._config["datacenter"]["envs"]}
+    eval "$({self._config["datacenter"]["binaries"]}/micromamba shell hook --shell bash )"
+    micromamba create -n hmq_{pyver}
+    micromamba activate hmq_{pyver}
+    micromamba install python={pyver} -c conda-forge -y
+    pip install hmq
+    """
+            )
+        subprocess.run(shlex.split(f"chmod +x {installfile}"))
+        subprocess.run(shlex.split(installfile))
+        os.remove(installfile)
+
+    def _install_packages(self, pyver, missing):
+        installlist = f"{self._config['datacenter']['envs']}/envs/hmq_{pyver}/pkg.list"
+        installfile = f"{self._config['datacenter']['tmpdir']}/install.sh"
+        with open(installfile, "w") as fh:
+            fh.write(
+                f"""#!/bin/bash
+    export MAMBA_ROOT_PREFIX={self._config["datacenter"]["envs"]}
+    eval "$({self._config["datacenter"]["binaries"]}/micromamba shell hook --shell bash )"
+    micromamba activate hmq_{pyver}
+    for package in {" ".join(missing)};
+    do
+        pip install $package;
+        echo $package >> {installlist};
+    done
+    """
+            )
+        subprocess.run(shlex.split(f"chmod +x {installfile}"))
+        subprocess.run(shlex.split(installfile))
+        os.remove(installfile)
+
+    def meet_all(self, pyvers):
+        # install python versions
+        for pyver in set(pyvers):
+            if not os.path.exists(
+                f"{self._config['datacenter']['envs']}/envs/hmq_{pyver}"
+            ):
+                self._install_env(pyver)
+
+        # install requirements
+        for pyver in set(pyvers):
+            installlist = (
+                f"{self._config['datacenter']['envs']}/envs/hmq_{pyver}/pkg.list"
+            )
+            missing = hmq.api.missing_dependencies(
+                self._config["datacenter"]["name"], installlist, pyver
+            )
+            if len(missing) > 0:
+                self._install_packages(pyver, missing)
+
+
+class SlurmManager:
     def __init__(self, config):
         self._config = config
         self._idle_update_time = 0
@@ -114,10 +136,38 @@ class SlurmDirector:
         return self._idle_compute_units
 
 
+class RedisManager:
+    def __init__(self, config):
+        # check redis is reachable
+        self._r = redis.StrictRedis(
+            host=config["datacenter"]["redis_host"],
+            port=config["datacenter"]["redis_port"],
+            password=config["datacenter"]["redis_pass"],
+        )
+        try:
+            self._r.ping()
+        except:
+            print(
+                "Error: cluster-local redis not reachable with the given credentials."
+            )
+            sys.exit(1)
+
+    @property
+    def total_jobs(self):
+        total = 0
+        for queue in self._r.smembers("rq:queues"):
+            total += self._r.llen(queue)
+        return total
+
+    @property
+    def active_queues(self):
+        return [_.replace("rq:queue:", "") for _ in self._r.smembers("rq:queues")]
+
+
 def main():
     # test for conda env name
-    if os.getenv("CONDA_DEFAULT_ENV") != "hmq_base":
-        print("Error: conda environment not activated or not called hmq_base")
+    if os.getenv("CONDA_DEFAULT_ENV") != "hmq_prod":
+        print("Error: conda environment not activated or not called hmq_prod")
         sys.exit(1)
 
     # load config
@@ -125,78 +175,57 @@ def main():
     with open(configfile) as f:
         config = toml.load(f)
 
+    # if sentry is configured, set it up
+    if "sentry" in config and "director" in config["sentry"]:
+        import sentry_sdk
+
+        sentry_sdk.init(
+            dsn=config["sentry"]["director"],
+        )
+
     # verify binaries
     for binary in ["micromamba"]:
         if not os.path.exists(config["datacenter"]["binaries"] + "/" + binary):
             print(f"Error: {binary} not found in {config['datacenter']['binaries']}")
             sys.exit(1)
 
-    # check redis is reachable
-    r = redis.StrictRedis(
-        host=config["server"]["redis_host"],
-        port=config["server"]["redis_port"],
-        password=hmq.api._get_message_secret(),
-    )
-    try:
-        r.ping()
-    except:
-        print("Error: cluster-local redis not reachable with the given credentials.")
-        sys.exit(1)
-
-    director = SlurmDirector(config)
-    director.read_template(f"{sys.argv[1]}/hmq.job")
+    # set up domain managers
+    slurm = SlurmManager(config)
+    slurm.read_template(f"{sys.argv[1]}/hmq.job")
+    localredis = RedisManager(config)
+    dependencies = DependencyManager(config)
 
     while True:
         time.sleep(10)
 
-        pyvers = []
-
-        # get jobs
-        packagelists = build_packagelists(config)
-
-        # count empty slots
-        nslots = 3000
-        # TODO: improve to use rq native methods
-        for queue in r.smembers("rq:queues"):
-            nslots -= r.llen(queue)
+        nslots = 3000 - localredis.total_jobs
         if nslots <= 0:
             continue
 
         qtasks = hmq.api.dequeue_tasks(
             config["datacenter"]["name"],
-            packagelists,
+            dependencies.packagelists,
             nslots,
-            director.idle_compute_units,
+            slurm.idle_compute_units,
         )
+        pyvers = []
         for queuename, tasks in qtasks:
-            queue = rq.Queue(queuename, connection=r)
+            queue = rq.Queue(queuename, connection=localredis._r)
             version, numcores = parse_queue_name(queuename)
+            pyvers.append(version)
             if version is None:
                 continue
 
             for task in tasks:
                 rq_job = queue.enqueue("hmq.unwrap", **task)
-                r.hset("hmq2rq", task["hmqid"], rq_job.id)
+                localredis._r.hset("hmq2rq", task["hmqid"], rq_job.id)
 
-        # install python versions
-        for pyver in set(pyvers):
-            if os.path.exists(f"{config['datacenter']['envs']}/envs/hmq_{pyver}"):
-                continue
-            install(config, pyver)
+        dependencies.meet_all(pyvers)
 
-        # install requirements
-        for pyver in set(pyvers):
-            installlist = f"{config['datacenter']['envs']}/envs/hmq_{pyver}/pkg.list"
-            missing = hmq.api.missing_dependencies(
-                config["datacenter"]["name"], installlist, pyver
-            )
-            if len(missing) > 0:
-                install_packages(config, pyver, missing)
-
-        njobs = director.queued_jobs
+        njobs = slurm.queued_jobs
 
         # submit jobs for random populated queues
-        active_queues = [_.replace("rq:queue:", "") for _ in r.smembers("rq:queues")]
+        active_queues = localredis.active_queues
         while njobs < config["datacenter"]["maxjobs"]:
             if len(active_queues) == 0:
                 break
@@ -217,7 +246,7 @@ def main():
                 "binaries": config["datacenter"]["binaries"],
                 "partitions": config["datacenter"]["partitions"],
             }
-            director.submit_job(variables)
+            slurm.submit_job(variables)
             njobs += 1
 
 

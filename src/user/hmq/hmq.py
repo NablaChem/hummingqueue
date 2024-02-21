@@ -419,7 +419,11 @@ class API:
             functions[function] = functools.partial(raise_later, hmq_message=msg)
 
     def dequeue_tasks(
-        self, datacenter: str, packagelists: dict[str, str], maxtasks: int
+        self,
+        datacenter: str,
+        packagelists: dict[str, str],
+        maxtasks: int,
+        available: int,
     ):
         # build list of packages
         packages = {}
@@ -434,6 +438,7 @@ class API:
             "challenge": self._get_challenge(),
             "maxtasks": maxtasks,
             "packages": packages,
+            "available": available,
         }
         return self._post("/tasks/dequeue", payload)
 
@@ -509,7 +514,7 @@ class API:
             Challenge
         """
         if time.time() - self._challenge_time > 10:
-            response = str(int(self._get("/auth/challenge").json()["challenge"]))
+            response = str(int(float(self._get("/auth/challenge").json()["challenge"])))
 
             self._challenge = self._signature.sign(
                 response.encode("ascii"), encoder=nacl.encoding.Base64Encoder
