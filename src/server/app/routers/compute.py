@@ -393,6 +393,9 @@ class TasksDequeue(BaseModel):
     datacenter: str = Field(..., description="Datacenter checking in.")
     packages: Dict[str, List[str]] = Field(..., description="Installed packages.")
     maxtasks: int = Field(..., description="Maximum number of tasks to return.")
+    available: int = Field(
+        ..., description="Estimated number of available compute units."
+    )
 
 
 @app.post("/tasks/dequeue", tags=["compute"])
@@ -402,7 +405,13 @@ def tasks_dequeue(body: TasksDequeue):
     # update heartbeat
     auth.db.heartbeat.update_one(
         {"datacenter": body.datacenter},
-        {"$set": {"ts": time.time(), "packages": body.packages}},
+        {
+            "$set": {
+                "ts": time.time(),
+                "packages": body.packages,
+                "available": body.available,
+            }
+        },
         upsert=True,
     )
 

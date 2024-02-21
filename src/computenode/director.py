@@ -63,6 +63,57 @@ def build_packagelists(config) -> dict[str, str]:
     return ps
 
 
+def parse_queue_name(queue: str) -> tuple[str, str]:
+    regex = r"py-(?P<pythonversion>.+)-nc-(?P<numcores>.+)-dc-(?P<datacenter>.+)"
+    m = re.match(regex, queue)
+    if m is None:
+        return None, None
+    version = m.group("pythonversion")
+    numcores = m.group("numcores")
+    return version, numcores
+
+
+class SlurmDirector:
+    def __init__(self, config):
+        self._config = config
+        self._idle_update_time = 0
+
+    def read_template(self, filename: str):
+        with open(filename) as fh:
+            self._templatestr = fh.read()
+
+    def submit_job(self, variables: dict):
+        tmpdir = self._config["datacenter"]["tmpdir"]
+        with open(f"{tmpdir}/hmq.job", "w") as fh:
+            content = Template(self._templatestr).substitute(variables)
+            fh.write(content)
+
+        subprocess.run(shlex.split("sbatch hmq.job"), cwd=tmpdir)
+
+    @property
+    def queued_jobs(self):
+        # test how many jobs are already queued
+        cmd = f"squeue -u {os.getenv('USER', '')} "
+        output = subprocess.check_output(shlex.split(cmd))
+        njobs = len(output.splitlines()) - 1
+        return njobs
+
+    @property
+    def idle_compute_units(self):
+        if time.time() - self._idle_update_time > 60:
+            cmd = 'sinfo -o "%n %e %a %C %P" -p {config["datacenter"]["partitions"]}'
+            lines = subprocess.check_output(shlex.split(cmd)).splitlines()
+            nodes = {}
+            for nodeinfo in lines[1:]:
+                name, mem, avl, cores, partition = nodeinfo.split()
+                memunits = int(mem) / 4000
+                cores = int(cores.split("/")[1])
+                nodes[name] = min(memunits, cores)
+            self._idle_compute_units = sum(nodes.values())
+
+        return self._idle_compute_units
+
+
 def main():
     # test for conda env name
     if os.getenv("CONDA_DEFAULT_ENV") != "hmq_base":
@@ -89,12 +140,11 @@ def main():
     try:
         r.ping()
     except:
-        print("Error: redis not reachable with the given credentials.")
+        print("Error: cluster-local redis not reachable with the given credentials.")
         sys.exit(1)
 
-    # request jobs / run heartbeat
-    with open(f"{sys.argv[1]}/hmq.job") as fh:
-        templatestr = fh.read()
+    director = SlurmDirector(config)
+    director.read_template(f"{sys.argv[1]}/hmq.job")
 
     while True:
         time.sleep(10)
@@ -113,18 +163,16 @@ def main():
             continue
 
         qtasks = hmq.api.dequeue_tasks(
-            config["datacenter"]["name"], packagelists, nslots
+            config["datacenter"]["name"],
+            packagelists,
+            nslots,
+            director.idle_compute_units,
         )
         for queuename, tasks in qtasks:
             queue = rq.Queue(queuename, connection=r)
-            regex = (
-                r"py-(?P<pythonversion>.+)-nc-(?P<numcores>.+)-dc-(?P<datacenter>.+)"
-            )
-            m = re.match(regex, queue)
-            if m is None:
+            version, numcores = parse_queue_name(queuename)
+            if version is None:
                 continue
-            version = m.group("pythonversion")
-            numcores = m.group("numcores")
 
             for task in tasks:
                 rq_job = queue.enqueue("hmq.unwrap", **task)
@@ -145,10 +193,7 @@ def main():
             if len(missing) > 0:
                 install_packages(config, pyver, missing)
 
-        # test how many jobs are already queued
-        cmd = f"squeue -u {os.getenv('USER', '')} "
-        output = subprocess.check_output(shlex.split(cmd))
-        njobs = len(output.splitlines()) - 1
+        njobs = director.queued_jobs
 
         # submit jobs for random populated queues
         active_queues = [_.replace("rq:queue:", "") for _ in r.smembers("rq:queues")]
@@ -157,12 +202,9 @@ def main():
                 break
 
             queuename = random.choice(active_queues)
-
-            m = re.match(regex, queue)
-            if m is None:
+            version, numcores = parse_queue_name(queuename)
+            if version is None:
                 continue
-            version = m.group("pythonversion")
-            numcores = m.group("numcores")
 
             variables = {
                 "pyver": version,
@@ -173,15 +215,9 @@ def main():
                 "redis_port": config["server"]["redis_port"],
                 "redis_host": config["server"]["redis_host"],
                 "binaries": config["datacenter"]["binaries"],
+                "partitions": config["datacenter"]["partitions"],
             }
-
-            with open(f"{config['datacenter']['tmpdir']}/hmq.job", "w") as fh:
-                content = Template(templatestr).substitute(variables)
-                fh.write(content)
-
-            subprocess.run(
-                shlex.split("sbatch hmq.job"), cwd=config["datacenter"]["tmpdir"]
-            )
+            director.submit_job(variables)
             njobs += 1
 
 

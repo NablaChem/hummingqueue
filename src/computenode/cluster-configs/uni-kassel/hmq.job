@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --partition=AG-CompChem,public,public2,public4,public2023
+#SBATCH --partition=${partitions}
 #SBATCH --nodes=1
 #SBATCH --mem-per-cpu=4000
 #SBATCH --time-min=6:00:00
