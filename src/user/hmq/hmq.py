@@ -403,7 +403,6 @@ class API:
             "delete": tasks,
             "challenge": self._get_challenge(),
         }
-        print(payload)
         deleted = self._post("/tasks/delete", payload)
         return deleted
 
@@ -456,6 +455,9 @@ class API:
         packagelists: dict[str, str],
         maxtasks: int,
         available: int,
+        allocated: int,
+        running: int,
+        used: int,
     ):
         # build list of packages
         packages = {}
@@ -471,6 +473,9 @@ class API:
             "maxtasks": maxtasks,
             "packages": packages,
             "available": available,
+            "allocated": allocated,
+            "running": running,
+            "used": used,
         }
         return self._post("/tasks/dequeue", payload)
 
@@ -539,6 +544,7 @@ class API:
             Challenge
         """
         if time.time() - self._challenge_time > 10:
+            self._build_box()
             response = str(int(float(self._get("/auth/challenge").json()["challenge"])))
 
             self._challenge = self._signature.sign(

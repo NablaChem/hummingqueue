@@ -9,7 +9,7 @@ import redis
 import os
 from string import Template
 import rq
-from rq import Queue
+from rq import Queue, Worker
 from rq.results import Result
 import re
 import random
@@ -212,11 +212,11 @@ class RedisManager:
         self._r.delete("hmq:functions")
 
     @property
-    def hmqids(self):
-        return self._r.hkeys("hmq:hmq2rq")
+    def hmqids(self) -> list[str]:
+        return [_.decode("ascii") for _ in self._r.hkeys("hmq:hmq2rq")]
 
     def cancel_and_delete(self, hmqid: str):
-        rqid = self._r.hget("hmq:hmq2rq", hmqid)
+        rqid = self._r.hget("hmq:hmq2rq", hmqid).decode("ascii")
         job = None
         try:
             job = rq.job.Job.fetch(rqid, connection=self._r)
@@ -233,6 +233,33 @@ class RedisManager:
             except:
                 pass
         self._r.hdel("hmq:hmq2rq", hmqid)
+
+    @property
+    def running_tasks(self):
+        running = 0
+        for queue in Queue.all(connection=self._r):
+            running += queue.started_job_registry.count
+        return running
+
+    @property
+    def allocated_units(self):
+        allocated = 0
+        for queue in Queue.all(connection=self._r):
+            _, numcores = parse_queue_name(queue.name)
+            allocated += queue.started_job_registry.count * int(numcores)
+        return allocated
+
+    @property
+    def busy_units(self):
+        busy = 0
+        for worker in Worker.all(connection=self._r):
+            job = worker.get_current_job()
+            if job is None:
+                continue
+
+            _, numcores = parse_queue_name(job.origin)
+            busy += int(numcores)
+        return busy
 
 
 def main():
@@ -300,10 +327,13 @@ def main():
             continue
 
         qtasks = hmq.api.dequeue_tasks(
-            config["datacenter"]["name"],
-            dependencies.packagelists,
-            nslots,
-            slurm.idle_compute_units,
+            datacenter=config["datacenter"]["name"],
+            packagelists=dependencies.packagelists,
+            maxtasks=nslots,
+            available=slurm.idle_compute_units,
+            allocated=localredis.allocated_units,
+            running=localredis.running_tasks,
+            used=localredis.busy_units,
         )
         pyvers = []
         for queuename, tasks in qtasks.items():

@@ -134,21 +134,22 @@ def update_stats(last_update: float):
     if unixminute_now == unixminute_last:
         return last_update
 
-    workers = Worker.all(connection=auth.redis)
     njobs = auth.db.tasks.count_documents({"status": {"$in": ["pending", "queued"]}})
 
-    # workers.queues cannot deal with commas in queue names
-    ncores = [
-        _cores_from_queue_name(auth.redis.hmget(_.key, "queues")[0].decode("ascii"))
-        for _ in workers
-    ]
-    states = [_.state for _ in workers]
-    tasks_running = len([_ for _ in workers if _.state == "busy"])
-    cores_used = sum([cores for cores, state in zip(ncores, states) if state == "busy"])
-    cores_available = sum(ncores)
+    tasks_running = 0
+    cores_used = 0
+    cores_allocated = 0
+    cores_available = 0
+    for dc in auth.db.heartbeat.find():
+        if now - dc["ts"] < 100:
+            tasks_running += dc["running"]
+            cores_used += dc["used"]
+            cores_allocated += dc["allocated"]
+            cores_available += dc["available"]
 
     auth.db.stats.insert_one(
         {
+            "cores_allocated": cores_allocated,
             "cores_available": cores_available,
             "cores_used": cores_used,
             "tasks_queued": njobs,
@@ -218,9 +219,15 @@ def update_stats(last_update: float):
 
 def flow_control():
     last_active_queues = 0
+    last_update_stats = 0
     while True:
         try:
             last_active_queues = check_active_queues(last_active_queues)
         except:
             continue
-        time.sleep(1)
+        try:
+            last_update_stats = update_stats(last_update_stats)
+        except:
+            continue
+
+        time.sleep(3)

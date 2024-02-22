@@ -388,6 +388,9 @@ class TasksDequeue(BaseModel):
     available: int = Field(
         ..., description="Estimated number of available compute units."
     )
+    allocated: int = Field(..., description="Number of allocated compute units.")
+    running: int = Field(..., description="Number of running tasks.")
+    used: int = Field(..., description="Number of used compute units.")
 
 
 @app.post("/tasks/dequeue", tags=["compute"])
@@ -402,6 +405,9 @@ def tasks_dequeue(body: TasksDequeue):
                 "ts": time.time(),
                 "packages": body.packages,
                 "available": body.available,
+                "allocated": body.allocated,
+                "running": body.running,
+                "used": body.used,
             }
         },
         upsert=True,
