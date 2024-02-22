@@ -42,40 +42,64 @@ df = pd.DataFrame(rows)
 df = df.sort_values("age", ascending=False)
 
 
-available = (
+used = (
     alt.Chart(df)
     .mark_circle(opacity=0.6, color=primary)
     .mark_line(opacity=0.6, color=primary)
     .encode(x="age", y="cores_used")
     .properties(height=200)
 )
-used = (
+domain = max(10, df.cores_allocated.max())
+allocated = (
     alt.Chart(df)
     .mark_area(opacity=0.6, color=primary)
-    .encode(x="age", y="cores_available")
+    .encode(
+        x="age",
+        y=alt.Y("cores_allocated", scale=alt.Scale(domain=(0, domain))).axis(
+            titleColor=primary,
+            title="Allocated / used cores",
+        ),
+    )
 )
 
-au = alt.layer(available, used)
-au.layer[0].encoding.y.title = "Available / used cores"
-au.layer[0].encoding.x.title = "Time ago [minutes]"
-
+available = (
+    alt.Chart(df)
+    .mark_line(color=secondary)
+    .encode(
+        x="age",
+        y=alt.Y("cores_available").axis(titleColor=secondary, title="Available cores"),
+    )
+)
+c = alt.layer(allocated + used, available).resolve_scale(y="independent")
 
 with queue:
     st.altair_chart(
-        au,
+        c,
         use_container_width=True,
     )
 
+domain = max(10, df.tasks_running.max())
 tasks = (
     alt.Chart(df)
     .mark_line(color=primary)
-    .encode(x="age", y=alt.Y("tasks_running").axis(titleColor=primary))
+    .encode(
+        x="age",
+        y=alt.Y("tasks_running", scale=alt.Scale(domain=(0, domain))).axis(
+            titleColor=primary
+        ),
+    )
     .properties(height=200)
 )
+domain = max(10, df.tasks_queued.max())
 tasks2 = (
     alt.Chart(df)
     .mark_line(color=secondary)
-    .encode(x="age", y=alt.Y("tasks_queued").axis(titleColor=secondary))
+    .encode(
+        x="age",
+        y=alt.Y("tasks_queued", scale=alt.Scale(domain=(0, domain))).axis(
+            titleColor=secondary
+        ),
+    )
 )
 
 c = alt.layer(tasks, tasks2).resolve_scale(y="independent")
