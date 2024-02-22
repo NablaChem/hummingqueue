@@ -1,8 +1,5 @@
-from rq import Queue, Worker
 import time
 from . import auth
-from rq.job import Job
-import rq
 
 
 def refill_redis(njobs: int):
@@ -32,7 +29,7 @@ def refill_redis(njobs: int):
 def check_active_queues(last_run):
     """Ensures all relevant queues are in the active_queues collection."""
     # run frequency
-    if time.time() - last_run < 120:
+    if time.time() - last_run < 20:
         return last_run
 
     pipeline = [
@@ -220,22 +217,10 @@ def update_stats(last_update: float):
 
 
 def flow_control():
-    # MongoDB -> redis
-    last_update = 0
     last_active_queues = 0
-    last_stale = 0
     while True:
-        refill_redis(500)
-        try:
-            last_update = update_stats(last_update)
-        except:
-            continue
         try:
             last_active_queues = check_active_queues(last_active_queues)
-        except:
-            continue
-        try:
-            last_stale = check_stale_jobs(last_stale)
         except:
             continue
         time.sleep(1)

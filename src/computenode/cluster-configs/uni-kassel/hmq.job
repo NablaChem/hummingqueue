@@ -42,6 +42,7 @@ do
 	cat << EOF > config.py
 REDIS_HOST = '${redis_host}'
 REDIS_PORT = '${redis_port}'
+REDIS_PASSWORD = '${redis_pass}'
 EOF
 	rq worker -c config -w hmq.CachedWorker --max-idle-time 60 --quiet --burst ${queues} > /dev/null 2>&1 &
 	cd 

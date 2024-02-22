@@ -9,6 +9,8 @@ import redis
 import os
 from string import Template
 import rq
+from rq import Queue
+from rq.results import Result
 import re
 import random
 
@@ -115,22 +117,31 @@ class SlurmManager:
     @property
     def queued_jobs(self):
         # test how many jobs are already queued
-        cmd = f"squeue -u {os.getenv('USER', '')} "
+        cmd = f"squeue -u {os.getenv('USER', '')} -o %T -h"
         output = subprocess.check_output(shlex.split(cmd))
-        njobs = len(output.splitlines()) - 1
+        njobs = len(
+            [_ for _ in output.splitlines() if "COMPLETING" not in _.decode("ascii")]
+        )
         return njobs
 
     @property
     def idle_compute_units(self):
         if time.time() - self._idle_update_time > 60:
-            cmd = 'sinfo -o "%n %e %a %C %P" -p {config["datacenter"]["partitions"]}'
+            cmd = (
+                f'sinfo -o "%n %e %a %C" -p {self._config["datacenter"]["partitions"]}'
+            )
             lines = subprocess.check_output(shlex.split(cmd)).splitlines()
             nodes = {}
             for nodeinfo in lines[1:]:
-                name, mem, avl, cores, partition = nodeinfo.split()
-                memunits = int(mem) / 4000
-                cores = int(cores.split("/")[1])
-                nodes[name] = min(memunits, cores)
+                try:
+                    name, mem, avl, cores = nodeinfo.decode("ascii").split()
+                    if avl != "up":
+                        continue
+                    memunits = int(int(mem) / 4000)
+                    cores = int(cores.split("/")[1])
+                    nodes[name] = min(memunits, cores)
+                except:
+                    continue
             self._idle_compute_units = sum(nodes.values())
 
         return self._idle_compute_units
@@ -154,14 +165,74 @@ class RedisManager:
 
     @property
     def total_jobs(self):
-        total = 0
-        for queue in self._r.smembers("rq:queues"):
-            total += self._r.llen(queue)
-        return total
+        all_queues = Queue.all(connection=self._r)
+        return sum([q.count for q in all_queues])
 
     @property
-    def active_queues(self):
-        return [_.replace("rq:queue:", "") for _ in self._r.smembers("rq:queues")]
+    def awaiting_queues(self):
+        all_queues = Queue.all(connection=self._r)
+        awaiting = []
+        for q in all_queues:
+            if q.count > 0 and q.count > q.started_job_registry.count:
+                awaiting.append(q.name)
+        return awaiting
+
+    def add_map_entry(self, hmqid, rqid):
+        self._r.hset("hmq:hmq2rq", hmqid, rqid)
+
+    def remove_map_entry(self, hmqid):
+        self._r.hdel("hmq:hmq2rq", hmqid)
+
+    def cache_function(self, function):
+        if not self._r.hexists("hmq:functions", function):
+            content = hmq.api.fetch_function(function)
+            self._r.hset("hmq:functions", function, content)
+
+    @property
+    def to_upload(self):
+        rqids = []
+        for queue in Queue.all(connection=self._r):
+            for job in queue.finished_job_registry.get_job_ids():
+                rqids.append(job)
+        return rqids
+
+    def clear_idle_and_empty(self):
+        all_queues = Queue.all(connection=self._r)
+        for queue in all_queues:
+            if queue.count > 0:
+                return False
+            if queue.started_job_registry.count > 0:
+                return False
+            if queue.failed_job_registry.count > 0:
+                return False
+
+            if queue.finished_job_registry.count == 0:
+                queue.delete(delete_jobs=True)
+
+        self._r.delete("hmq:functions")
+
+    @property
+    def hmqids(self):
+        return self._r.hkeys("hmq:hmq2rq")
+
+    def cancel_and_delete(self, hmqid: str):
+        rqid = self._r.hget("hmq:hmq2rq", hmqid)
+        job = None
+        try:
+            job = rq.job.Job.fetch(rqid, connection=self._r)
+        except rq.exceptions.NoSuchJobError:
+            pass
+        if job:
+            try:
+                Result.delete_all(job)
+            except:
+                pass
+            try:
+                job.cancel()
+                job.delete()
+            except:
+                pass
+        self._r.hdel("hmq:hmq2rq", hmqid)
 
 
 def main():
@@ -195,9 +266,35 @@ def main():
     localredis = RedisManager(config)
     dependencies = DependencyManager(config)
 
+    first = True
     while True:
-        time.sleep(10)
+        if not first:
+            print("Waiting...")
+            time.sleep(10)
+        first = False
 
+        # maintenance: clear function cache
+        localredis.clear_idle_and_empty()
+
+        # maintenance: remove deleted jobs
+        table = hmq.api.get_tasks_status(localredis.hmqids)
+        for hmqid, status in table.items():
+            if status == "deleted":
+                localredis.cancel_and_delete(hmqid)
+
+        # upload results
+        for rqid in localredis.to_upload:
+            job = rq.job.Job.fetch(rqid, connection=localredis._r)
+            payload = job.result
+            try:
+                hmq.api.store_results([payload])
+            except:
+                continue
+            localredis.remove_map_entry(payload["task"])
+            Result.delete_all(job)
+            job.delete()
+
+        # add more work to the queues
         nslots = 3000 - localredis.total_jobs
         if nslots <= 0:
             continue
@@ -209,28 +306,28 @@ def main():
             slurm.idle_compute_units,
         )
         pyvers = []
-        for queuename, tasks in qtasks:
+        for queuename, tasks in qtasks.items():
             queue = rq.Queue(queuename, connection=localredis._r)
             version, numcores = parse_queue_name(queuename)
-            pyvers.append(version)
             if version is None:
                 continue
+            pyvers.append(version)
 
             for task in tasks:
+                task["result_ttl"] = -1
                 rq_job = queue.enqueue("hmq.unwrap", **task)
-                localredis._r.hset("hmq2rq", task["hmqid"], rq_job.id)
+                localredis.add_map_entry(task["hmqid"], rq_job.id)
+                localredis.cache_function(task["function"])
 
-        dependencies.meet_all(pyvers)
+        dependencies.meet_all(list(set(pyvers)))
 
-        njobs = slurm.queued_jobs
-
-        # submit jobs for random populated queues
-        active_queues = localredis.active_queues
-        while njobs < config["datacenter"]["maxjobs"]:
-            if len(active_queues) == 0:
-                break
-
-            queuename = random.choice(active_queues)
+        # submit one job for random populated queues with work to do
+        awaiting_queues = localredis.awaiting_queues
+        if (
+            len(awaiting_queues) > 0
+            and slurm.queued_jobs <= config["datacenter"]["maxjobs"]
+        ):
+            queuename = random.choice(awaiting_queues)
             version, numcores = parse_queue_name(queuename)
             if version is None:
                 continue
@@ -241,13 +338,13 @@ def main():
                 "queues": queuename,
                 "envs": config["datacenter"]["envs"],
                 "baseurl": config["server"]["baseurl"],
-                "redis_port": config["server"]["redis_port"],
-                "redis_host": config["server"]["redis_host"],
+                "redis_port": config["datacenter"]["redis_port"],
+                "redis_host": config["datacenter"]["redis_host"],
+                "redis_pass": config["datacenter"]["redis_pass"],
                 "binaries": config["datacenter"]["binaries"],
                 "partitions": config["datacenter"]["partitions"],
             }
             slurm.submit_job(variables)
-            njobs += 1
 
 
 if __name__ == "__main__":

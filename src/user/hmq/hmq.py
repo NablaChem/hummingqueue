@@ -1,6 +1,7 @@
 import uuid
 import sys
 import traceback
+import os
 import time
 import importlib.metadata
 import requests
@@ -54,6 +55,7 @@ class API:
         self._box = None
         self._url = None
         self._challenge_time = 0
+        self._session = None
 
     def setup(self, url: str):
         config = configparser.ConfigParser()
@@ -179,11 +181,14 @@ class API:
             )
         return case
 
-    def _build_box(self):
+    def _build_box(self, offline=False):
         if self._box is None:
             config = configparser.ConfigParser()
             config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
-            self._url = self._clean_instance(config["server"]["url"])
+            if offline:
+                self._url = config["server"]["url"]
+            else:
+                self._url = self._clean_instance(config["server"]["url"])
             self._signature = SigningKey(
                 config["server"]["sign"], encoder=nacl.encoding.Base64Encoder
             )
@@ -271,21 +276,40 @@ class API:
             installed = []
         return [req for req in requirements if req not in installed]
 
+    def _init_session(self):
+        if self._session is None:
+            self._session = requests.Session()
+
     def _post(self, endpoint, payload):
+        self._init_session()
         if endpoint != "/user/secrets":
             self._build_box()
 
-        response = requests.post(
+        if os.getenv("HMQ_DEBUG") is not None:
+            print(f"### POST {self._url}{endpoint}")
+            print(json.dumps(payload, indent=4))
+            print("# " + "-" * 30)
+
+        response = self._session.post(
             self._url + endpoint, json=payload, verify=self._verify
         )
+        if os.getenv("HMQ_DEBUG") is not None:
+            print(f"# RESPONSE {response.status_code}")
+            print("# " + "-" * 30)
+            try:
+                print(json.dumps(response.json(), indent=4))
+            except:
+                print(response.content)
+            print("#" * 30)
         if response.status_code in (404, 422):
             raise ValueError("Unable to post request.")
         return response.json()
 
     def _get(self, endpoint, baseurl=None):
+        self._init_session()
         if baseurl is None:
             baseurl = self._url
-        response = requests.get(baseurl + endpoint, verify=self._verify)
+        response = self._session.get(baseurl + endpoint, verify=self._verify)
         return response
 
     def register_function(self, remote_function: dict, digest: str):
@@ -367,6 +391,13 @@ class API:
         tasks = self._post("/tasks/find", payload)
         return tasks
 
+    def get_tasks_status(self, tasks: list[str]):
+        payload = {
+            "tasks": tasks,
+            "challenge": self._get_challenge(),
+        }
+        return self._post("/tasks/inspect", payload)
+
     def delete_tasks(self, tasks: list[str]):
         payload = {
             "delete": tasks,
@@ -376,12 +407,13 @@ class API:
         deleted = self._post("/tasks/delete", payload)
         return deleted
 
-    def warm_cache(self, function: str):
-        self._build_box()
+    def fetch_function(self, function: str):
+        return self._get(f"/function/fetch/{function}").content
+
+    def warm_cache(self, function: str, payload):
+        self._build_box(offline=True)
         if function in functions:
             return
-
-        payload = self._get(f"/function/fetch/{function}").json()
 
         # decrypt payload
         remote_function = self._decrypt(payload["function"])
@@ -442,20 +474,21 @@ class API:
         }
         return self._post("/tasks/dequeue", payload)
 
-    @staticmethod
-    def _worker(hmqid, call, function, secret, baseurl, verify):
-        def get_challenge(box, baseurl, verify):
-            challenge = requests.get(f"{baseurl}/auth/challenge", verify=verify).json()
-            payload = str(challenge["challenge"])
-            return base64.b64encode(box.encrypt(payload.encode("utf8"))).decode("ascii")
+    def store_results(self, results: list):
+        payload = {
+            "results": results,
+            "challenge": self._get_challenge(),
+        }
+        return self._post("/results/store", payload)
 
-        box = SecretBox(secret)
+    @staticmethod
+    def _worker(hmqid, call, function, computesecret):
         overall_start = time.time()
+        box = SecretBox(computesecret)
         errormsg = None
         result = None
 
         args, kwargs = json.loads(box.decrypt(base64.b64decode(call.encode("utf8"))))
-        api.warm_cache(function)
 
         starttime = time.time()
         try:
@@ -494,16 +527,8 @@ class API:
             payload["error"] = errormsg
         else:
             payload["result"] = result
-        payload = {
-            "results": [payload],
-            "challenge": get_challenge(box, baseurl, verify),
-        }
 
-        res = requests.post(
-            f"{baseurl}/results/store",
-            json=payload,
-            verify=verify,
-        )
+        return payload
 
     def _get_challenge(self) -> str:
         """Uses the server provided challenge for up to ten seconds.
@@ -736,15 +761,14 @@ def task(func):
 
 def unwrap(hmqid: str, call: str, function: str):
     api._build_box()
-    api._worker(hmqid, call, function, api._box._key, api._url, api._verify)
+    return api._worker(hmqid, call, function, api._box._key)
 
 
 class CachedWorker(Worker):
     def execute_job(self, job, queue):
-        api.warm_cache(job.kwargs["function"])
-        ret = super().execute_job(job, queue)
-        self.connection.hdel("id2id", job.kwargs["hmqid"])
-        return ret
+        payload = self.connection.hget("hmq:functions", job.kwargs["function"])
+        api.warm_cache(job.kwargs["function"], json.loads(payload.decode("ascii")))
+        return super().execute_job(job, queue)
 
 
 def cli():

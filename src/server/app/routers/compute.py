@@ -207,21 +207,6 @@ def tasks_delete(body: TasksDelete):
     if len(logentries) > 0:
         auth.db.logs.insert_many(logentries)
 
-    # rq
-    if len(existing_ids) > 0:
-        for rqid in auth.redis.hmget("id2id", existing_ids):
-            if rqid is None:
-                continue
-
-            # Might have been terminated in the meantime
-            try:
-                job = rq.job.Job.fetch(rqid.decode("ascii"), connection=auth.redis)
-                job.cancel()
-                job.delete()
-            except rq.exceptions.NoSuchJobError:
-                pass
-        auth.redis.hdel("id2id", *existing_ids)
-
     return existing_ids
 
 
@@ -426,7 +411,7 @@ def tasks_dequeue(body: TasksDequeue):
     regex = r"py-(?P<pythonversion>.+)-nc-(?P<numcores>.+)-dc-(?P<datacenter>.+)"
 
     tasks = {}
-    remaining = body.maxjobs
+    remaining = body.maxtasks
     logentries = []
     active_queues = [_["queue"] for _ in auth.db.active_queues.find()]
     random.shuffle(active_queues)
@@ -444,7 +429,7 @@ def tasks_dequeue(body: TasksDequeue):
                 return_document=True,
             )
             if task is None:
-                continue
+                break
             if queue not in tasks:
                 tasks[queue] = []
             tasks[queue].append(
