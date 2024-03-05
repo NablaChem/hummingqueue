@@ -729,7 +729,7 @@ def task(func):
             return
 
         # register function with server
-        callable = cloudpickle.dumps(func)
+        callable = func._callable
 
         remote_function = {
             "callable": callable,
@@ -759,6 +759,7 @@ def task(func):
         print(f"Completed tag: {tag.name}")
         return tag
 
+    func._callable = cloudpickle.dumps(func)
     wrapper.submit = submit
     func._calls = []
 
