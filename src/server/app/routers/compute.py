@@ -421,6 +421,7 @@ def tasks_dequeue(body: TasksDequeue):
     logentries = []
     active_queues = [_["queue"] for _ in auth.db.active_queues.find()]
     random.shuffle(active_queues)
+    runid = random.randint(0, 10e6)
     for queue in active_queues:
         m = re.match(regex, queue)
         if m is None:
@@ -429,27 +430,38 @@ def tasks_dequeue(body: TasksDequeue):
             continue
 
         while remaining > 0:
-            task = auth.db.tasks.find_one_and_update(
-                {"status": "pending", "queues": queue},
-                {"$set": {"status": "queued"}},
-                return_document=True,
+            candidates = auth.db.tasks.find(
+                {"status": "pending", "queues": queue}, {"_id": 1}, limit=remaining
             )
-            if task is None:
+            candidate_ids = [_["_id"] for _ in candidates]
+            if len(candidate_ids) == 0:
                 break
-            if queue not in tasks:
-                tasks[queue] = []
-            tasks[queue].append(
+
+            auth.db.tasks.update_many(
                 {
-                    "call": task["call"],
-                    "function": task["function"],
-                    "hmqid": task["id"],
-                    "job_timeout": "6h",
-                }
+                    "status": "pending",
+                    "queues": queue,
+                    "inflight": None,
+                    "_id": {"$in": candidate_ids},
+                },
+                {"$set": {"status": "queued", "inflight": runid}},
             )
-            remaining -= 1
-            logentries.append(
-                {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
-            )
+            inflight = auth.db.tasks.find({"status": "queued", "inflight": runid})
+            for task in inflight:
+                if queue not in tasks:
+                    tasks[queue] = []
+                tasks[queue].append(
+                    {
+                        "call": task["call"],
+                        "function": task["function"],
+                        "hmqid": task["id"],
+                        "job_timeout": "6h",
+                    }
+                )
+                remaining -= 1
+                logentries.append(
+                    {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
+                )
 
     # remove empty queues
     for queue in active_queues:
