@@ -1,4 +1,5 @@
 import uuid
+import inspect
 import sys
 import traceback
 import os
@@ -719,51 +720,64 @@ def grant_access(signing_request: str, adminkey: str, username: str):
     api.grant_access(signing_request, adminkey, username)
 
 
-def task(func):
-    def wrapper(*args, **kwargs):
-        func._calls.append((args, kwargs))
+def task(func=None, **defaultkwargs):
+    def task_decorator(func):
+        def wrapper(*args, **kwargs):
+            if defaultkwargs:
+                bound = inspect.signature(func).bind(*args, **kwargs)
+                kwargs = bound.arguments
+                kwargs.update(defaultkwargs)
+                args = ()
+            func._calls.append((args, kwargs))
 
-    def submit(tag=None, ncores=1, datacenters: str = None, packages=[], quiet=False):
-        if not api.ping():
-            print("Server is not reachable.")
-            return
+        def submit(
+            tag=None, ncores=1, datacenters: str = None, packages=[], quiet=False
+        ):
+            if not api.ping():
+                print("Server is not reachable.")
+                return
 
-        # register function with server
-        callable = func._callable
+            # register function with server
+            callable = func._callable
 
-        remote_function = {
-            "callable": callable,
-            "packages": packages,
-        }
+            remote_function = {
+                "callable": callable,
+                "packages": packages,
+            }
 
-        digest = hashlib.sha256(callable).hexdigest()
-        if not quiet:
-            print(f"Registering function with server: {digest}")
+            digest = hashlib.sha256(callable).hexdigest()
+            if not quiet:
+                print(f"Registering function with server: {digest}")
 
-        if not api.register_function(remote_function, digest):
-            raise ValueError("Could not register function with server.")
+            if not api.register_function(remote_function, digest):
+                raise ValueError("Could not register function with server.")
 
-        if not quiet:
-            print(f"Sending {len(func._calls)} tasks.")
+            if not quiet:
+                print(f"Sending {len(func._calls)} tasks.")
 
-        # send calls to server
-        tag = Tag(func.__name__)
-        if datacenters is None:
-            datacenters = []
-        else:
-            datacenters = [dc.strip() for dc in datacenters.split(",")]
-        tag._add_uuids(
-            api.submit_tasks(tag.name, digest, func._calls, ncores, datacenters)
-        )
+            # send calls to server
+            tag = Tag(tag or func.__name__)
+            if datacenters is None:
+                datacenters = []
+            else:
+                datacenters = [dc.strip() for dc in datacenters.split(",")]
+            tag._add_uuids(
+                api.submit_tasks(tag.name, digest, func._calls, ncores, datacenters)
+            )
+            func._calls = []
+            print(f"Completed tag: {tag.name}")
+            return tag
+
+        func._callable = cloudpickle.dumps(func)
+        wrapper.submit = submit
         func._calls = []
-        print(f"Completed tag: {tag.name}")
-        return tag
 
-    func._callable = cloudpickle.dumps(func)
-    wrapper.submit = submit
-    func._calls = []
+        return wrapper
 
-    return wrapper
+    if func is None:
+        return task_decorator
+    else:
+        return task_decorator(func)
 
 
 def unwrap(hmqid: str, call: str, function: str):
