@@ -222,6 +222,15 @@ class RedisManager:
 
         self._r.delete("hmq:functions")
 
+    def retry_failed_jobs(self):
+        for queue in Queue.all(connection=self._r):
+            for job in queue.failed_job_registry.get_job_ids():
+                try:
+                    job = rq.job.Job.fetch(job, connection=self._r)
+                    job.requeue()
+                except:
+                    pass
+
     @property
     def hmqids(self) -> list[str]:
         return [_.decode("ascii") for _ in self._r.hkeys("hmq:hmq2rq")]
@@ -330,6 +339,10 @@ def main():
                 for hmqid, status in table.items():
                     if status == "deleted":
                         localredis.cancel_and_delete(hmqid)
+
+            # maintenance: restart failed jobs
+            with span_context(op="restart_failed_jobs"):
+                localredis.retry_failed_jobs()
 
             # upload results
             with span_context(op="upload_results"):
