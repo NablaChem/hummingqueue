@@ -353,6 +353,10 @@ def main():
         # terminate the previous transaction
         sentry.finish_transaction()
 
+        # terminate if STOP file is present
+        if os.path.exists(f"{sys.argv[1]}/STOP"):
+            break
+
         if not first:
             print("Waiting...")
             time.sleep(10)
