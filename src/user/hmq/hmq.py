@@ -359,8 +359,10 @@ class API:
                 results[task] = result
                 continue
             for key in "result error".split():
-                if result[key] is not None:
-                    result[key] = self._decrypt(result[key])
+                if result[key]:
+                    # queue messages are not encrypted, results/compute errors are
+                    if not result[key].startswith("Hummingqueue"):
+                        result[key] = self._decrypt(result[key])
             results[task] = result
         return results
 
@@ -724,9 +726,11 @@ def task(func=None, **defaultkwargs):
     def task_decorator(func):
         def wrapper(*args, **kwargs):
             if defaultkwargs:
+                kwargs.update(defaultkwargs)
                 bound = inspect.signature(func).bind(*args, **kwargs)
                 kwargs = bound.arguments
-                kwargs.update(defaultkwargs)
+                for k in defaultkwargs.keys():
+                    del kwargs[k]
                 args = ()
             func._calls.append((args, kwargs))
 
@@ -768,7 +772,10 @@ def task(func=None, **defaultkwargs):
             print(f"Completed tag: {tag.name}")
             return tag
 
-        func._callable = cloudpickle.dumps(func)
+        if defaultkwargs:
+            func._callable = cloudpickle.dumps(functools.partial(func, **defaultkwargs))
+        else:
+            func._callable = cloudpickle.dumps(func)
         wrapper.submit = submit
         func._calls = []
 
