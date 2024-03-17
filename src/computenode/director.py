@@ -14,6 +14,17 @@ from rq.results import Result
 import re
 import random
 
+try:
+    import sentry_sdk
+
+    transaction_context = sentry_sdk.start_transaction
+    span_context = sentry_sdk.start_span
+except ImportError:
+    import contextlib
+
+    transaction_context = contextlib.nullcontext
+    span_context = contextlib.nullcontext
+
 
 def parse_queue_name(queue: str) -> tuple[str, str]:
     regex = r"py-(?P<pythonversion>.+)-nc-(?P<numcores>.+)-dc-(?P<datacenter>.+)"
@@ -265,63 +276,6 @@ class RedisManager:
         return busy
 
 
-class SentryManager:
-    @staticmethod
-    def select_trace_by_runtime(sampling_context):
-        duration = time.time() - sampling_context["starttime"]
-
-        # only interested in long-running transactions
-        if duration < 0.2:
-            return False
-
-        return True
-
-    def __init__(self, config):
-        self._active = False
-        if "sentry" in config and "director" in config["sentry"]:
-            self._active = True
-            import sentry_sdk
-
-            sentry_sdk.init(
-                dsn=config["sentry"]["director"],
-                enable_tracing=True,
-                traces_sampler=SentryManager.select_trace_by_runtime,
-            )
-        self._name = config["datacenter"]["name"]
-        self._transaction = None
-        self._span = None
-
-    def start_transaction(self):
-        if not self._active:
-            return
-
-        self.finish_transaction()
-        self._transaction = sentry_sdk.start_transaction(
-            op="director",
-            name=self._name,
-            custom_sampling_context={"starttime": time.time()},
-        )
-
-    def finish_transaction(self):
-        if not self._active:
-            return
-
-        if self._span:
-            self._span.finish()
-            self._span = None
-        if self._transaction:
-            self._transaction.finish()
-            self._transaction = None
-
-    def span(self, name):
-        if not self._active:
-            return
-
-        if self._span:
-            self._span.finish()
-        self._span = sentry_sdk.start_span(description=name)
-
-
 def main():
     # test for conda env name
     if os.getenv("CONDA_DEFAULT_ENV") != "hmq_prod":
@@ -334,7 +288,14 @@ def main():
         config = toml.load(f)
 
     # set up sentry
-    sentry = SentryManager(config)
+    try:
+        sentry_sdk.init(
+            dsn=config["sentry"]["director"],
+            enable_tracing=True,
+            traces_sample_rate=0.3,
+        )
+    except:
+        pass
 
     # verify binaries
     for binary in ["micromamba"]:
@@ -350,9 +311,6 @@ def main():
 
     first = True
     while True:
-        # terminate the previous transaction
-        sentry.finish_transaction()
-
         # terminate if STOP file is present
         if os.path.exists(f"{sys.argv[1]}/STOP"):
             break
@@ -361,89 +319,87 @@ def main():
             print("Waiting...")
             time.sleep(10)
         first = False
+        with transaction_context(op="director", name=config["datacenter"]["name"]):
+            # maintenance: clear function cache
+            with span_context(op="clear_function_cache"):
+                localredis.clear_idle_and_empty()
 
-        sentry.start_transaction()
+            # maintenance: remove deleted jobs
+            with span_context(op="remove_deleted_jobs"):
+                table = hmq.api.get_tasks_status(localredis.hmqids)
+                for hmqid, status in table.items():
+                    if status == "deleted":
+                        localredis.cancel_and_delete(hmqid)
 
-        # maintenance: clear function cache
-        sentry.span("clear_function_cache")
-        localredis.clear_idle_and_empty()
+            # upload results
+            with span_context(op="upload_results"):
+                for rqid in localredis.to_upload:
+                    job = rq.job.Job.fetch(rqid, connection=localredis._r)
+                    payload = job.result
+                    try:
+                        hmq.api.store_results([payload])
+                    except:
+                        continue
+                    localredis.remove_map_entry(payload["task"])
+                    Result.delete_all(job)
+                    job.delete()
 
-        # maintenance: remove deleted jobs
-        sentry.span("remove_deleted_jobs")
-        table = hmq.api.get_tasks_status(localredis.hmqids)
-        for hmqid, status in table.items():
-            if status == "deleted":
-                localredis.cancel_and_delete(hmqid)
+            # add more work to the queues
+            with span_context(op="add_more_work"):
+                nslots = 3000 - localredis.total_jobs
+                if nslots <= 0:
+                    continue
 
-        # upload results
-        sentry.span("upload_results")
-        for rqid in localredis.to_upload:
-            job = rq.job.Job.fetch(rqid, connection=localredis._r)
-            payload = job.result
-            try:
-                hmq.api.store_results([payload])
-            except:
-                continue
-            localredis.remove_map_entry(payload["task"])
-            Result.delete_all(job)
-            job.delete()
+                qtasks = hmq.api.dequeue_tasks(
+                    datacenter=config["datacenter"]["name"],
+                    packagelists=dependencies.packagelists,
+                    maxtasks=nslots,
+                    available=slurm.idle_compute_units,
+                    allocated=localredis.allocated_units,
+                    running=localredis.running_tasks,
+                    used=localredis.busy_units,
+                )
+                pyvers = []
+                for queuename, tasks in qtasks.items():
+                    queue = rq.Queue(queuename, connection=localredis._r)
+                    version, numcores = parse_queue_name(queuename)
+                    if version is None:
+                        continue
+                    pyvers.append(version)
 
-        # add more work to the queues
-        sentry.span("add_more_work")
-        nslots = 3000 - localredis.total_jobs
-        if nslots <= 0:
-            continue
+                    for task in tasks:
+                        task["result_ttl"] = -1
+                        rq_job = queue.enqueue("hmq.unwrap", **task)
+                        localredis.add_map_entry(task["hmqid"], rq_job.id)
+                        localredis.cache_function(task["function"])
 
-        qtasks = hmq.api.dequeue_tasks(
-            datacenter=config["datacenter"]["name"],
-            packagelists=dependencies.packagelists,
-            maxtasks=nslots,
-            available=slurm.idle_compute_units,
-            allocated=localredis.allocated_units,
-            running=localredis.running_tasks,
-            used=localredis.busy_units,
-        )
-        pyvers = []
-        for queuename, tasks in qtasks.items():
-            queue = rq.Queue(queuename, connection=localredis._r)
-            version, numcores = parse_queue_name(queuename)
-            if version is None:
-                continue
-            pyvers.append(version)
+                dependencies.meet_all(list(set(pyvers)))
 
-            for task in tasks:
-                task["result_ttl"] = -1
-                rq_job = queue.enqueue("hmq.unwrap", **task)
-                localredis.add_map_entry(task["hmqid"], rq_job.id)
-                localredis.cache_function(task["function"])
+            # submit one job for random populated queues with work to do
+            with span_context(op="submit_jobs"):
+                awaiting_queues = localredis.awaiting_queues
+                if (
+                    len(awaiting_queues) > 0
+                    and slurm.queued_jobs <= config["datacenter"]["maxjobs"]
+                ):
+                    queuename = random.choice(awaiting_queues)
+                    version, numcores = parse_queue_name(queuename)
+                    if version is None:
+                        continue
 
-        dependencies.meet_all(list(set(pyvers)))
-
-        # submit one job for random populated queues with work to do
-        sentry.span("submit_jobs")
-        awaiting_queues = localredis.awaiting_queues
-        if (
-            len(awaiting_queues) > 0
-            and slurm.queued_jobs <= config["datacenter"]["maxjobs"]
-        ):
-            queuename = random.choice(awaiting_queues)
-            version, numcores = parse_queue_name(queuename)
-            if version is None:
-                continue
-
-            variables = {
-                "pyver": version,
-                "ncores": numcores,
-                "queues": queuename,
-                "envs": config["datacenter"]["envs"],
-                "baseurl": config["server"]["baseurl"],
-                "redis_port": config["datacenter"]["redis_port"],
-                "redis_host": config["datacenter"]["redis_host"],
-                "redis_pass": config["datacenter"]["redis_pass"],
-                "binaries": config["datacenter"]["binaries"],
-                "partitions": config["datacenter"]["partitions"],
-            }
-            slurm.submit_job(variables)
+                    variables = {
+                        "pyver": version,
+                        "ncores": numcores,
+                        "queues": queuename,
+                        "envs": config["datacenter"]["envs"],
+                        "baseurl": config["server"]["baseurl"],
+                        "redis_port": config["datacenter"]["redis_port"],
+                        "redis_host": config["datacenter"]["redis_host"],
+                        "redis_pass": config["datacenter"]["redis_pass"],
+                        "binaries": config["datacenter"]["binaries"],
+                        "partitions": config["datacenter"]["partitions"],
+                    }
+                    slurm.submit_job(variables)
 
 
 if __name__ == "__main__":
