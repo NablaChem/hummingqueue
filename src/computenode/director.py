@@ -253,7 +253,10 @@ class RedisManager:
     def busy_units(self):
         busy = 0
         for worker in Worker.all(connection=self._r):
-            job = worker.get_current_job()
+            try:
+                job = worker.get_current_job()
+            except rq.exceptions.NoSuchJobError:
+                continue
             if job is None:
                 continue
 
