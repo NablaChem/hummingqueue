@@ -265,6 +265,63 @@ class RedisManager:
         return busy
 
 
+class SentryManager:
+    @staticmethod
+    def select_trace_by_runtime(sampling_context):
+        duration = time.time() - sampling_context["starttime"]
+
+        # only interested in long-running transactions
+        if duration < 0.2:
+            return False
+
+        return True
+
+    def __init__(self, config):
+        self._active = False
+        if "sentry" in config and "director" in config["sentry"]:
+            self._active = True
+            import sentry_sdk
+
+            sentry_sdk.init(
+                dsn=config["sentry"]["director"],
+                enable_tracing=True,
+                traces_sampler=SentryManager.select_trace_by_runtime,
+            )
+        self._name = config["datacenter"]["name"]
+        self._transaction = None
+        self._span = None
+
+    def start_transaction(self):
+        if not self._active:
+            return
+
+        self.finish_transaction()
+        self._transaction = sentry_sdk.start_transaction(
+            op="director",
+            name=self._name,
+            custom_sampling_context={"starttime": time.time()},
+        )
+
+    def finish_transaction(self):
+        if not self._active:
+            return
+
+        if self._span:
+            self._span.finish()
+            self._span = None
+        if self._transaction:
+            self._transaction.finish()
+            self._transaction = None
+
+    def span(self, name):
+        if not self._active:
+            return
+
+        if self._span:
+            self._span.finish()
+        self._span = sentry_sdk.start_span(description=name)
+
+
 def main():
     # test for conda env name
     if os.getenv("CONDA_DEFAULT_ENV") != "hmq_prod":
@@ -276,13 +333,8 @@ def main():
     with open(configfile) as f:
         config = toml.load(f)
 
-    # if sentry is configured, set it up
-    if "sentry" in config and "director" in config["sentry"]:
-        import sentry_sdk
-
-        sentry_sdk.init(
-            dsn=config["sentry"]["director"],
-        )
+    # set up sentry
+    sentry = SentryManager(config)
 
     # verify binaries
     for binary in ["micromamba"]:
@@ -298,21 +350,29 @@ def main():
 
     first = True
     while True:
+        # terminate the previous transaction
+        sentry.finish_transaction()
+
         if not first:
             print("Waiting...")
             time.sleep(10)
         first = False
 
+        sentry.start_transaction()
+
         # maintenance: clear function cache
+        sentry.span("clear_function_cache")
         localredis.clear_idle_and_empty()
 
         # maintenance: remove deleted jobs
+        sentry.span("remove_deleted_jobs")
         table = hmq.api.get_tasks_status(localredis.hmqids)
         for hmqid, status in table.items():
             if status == "deleted":
                 localredis.cancel_and_delete(hmqid)
 
         # upload results
+        sentry.span("upload_results")
         for rqid in localredis.to_upload:
             job = rq.job.Job.fetch(rqid, connection=localredis._r)
             payload = job.result
@@ -325,6 +385,7 @@ def main():
             job.delete()
 
         # add more work to the queues
+        sentry.span("add_more_work")
         nslots = 3000 - localredis.total_jobs
         if nslots <= 0:
             continue
@@ -355,6 +416,7 @@ def main():
         dependencies.meet_all(list(set(pyvers)))
 
         # submit one job for random populated queues with work to do
+        sentry.span("submit_jobs")
         awaiting_queues = localredis.awaiting_queues
         if (
             len(awaiting_queues) > 0
