@@ -25,6 +25,9 @@ micromamba activate hmq_${pyver}
 # cleanup support
 cleanup() {
 	# kill all descendant jobs
+	# calls pkill twice so running jobs get terminated as well
+	pkill -P $$
+	sleep 2
 	pkill -P $$
 	
 	# delete tmp directories
