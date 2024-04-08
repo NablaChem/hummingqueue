@@ -143,7 +143,11 @@ class SlurmManager:
             cmd = (
                 f'sinfo -o "%n %e %a %C" -p {self._config["datacenter"]["partitions"]}'
             )
-            lines = subprocess.check_output(shlex.split(cmd)).splitlines()
+            try:
+                lines = subprocess.check_output(shlex.split(cmd)).splitlines()
+            except subprocess.CalledProcessError:
+                # SLURM failure, e.g. from downtime/network issues.
+                return 0
             nodes = {}
             for nodeinfo in lines[1:]:
                 try:
