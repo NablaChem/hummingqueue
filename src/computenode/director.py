@@ -19,11 +19,13 @@ try:
 
     transaction_context = sentry_sdk.start_transaction
     span_context = sentry_sdk.start_span
+    from sentry_sdk.crons import monitor
 except ImportError:
     import contextlib
 
     transaction_context = contextlib.nullcontext
     span_context = contextlib.nullcontext
+    monitor = None
 
 
 def parse_queue_name(queue: str) -> tuple[str, str]:
@@ -207,6 +209,14 @@ class RedisManager:
                 rqids.append(job)
         return rqids
 
+    def remove_from_registry(self, rqid):
+        """Clears a job from any registry.
+
+        Required if the registry holds a job that does not exist any more.
+        Rare: result of a race condition."""
+        for queue in Queue.all(connection=self._r):
+            queue.finished_job_registry.remove(rqid)
+
     def clear_idle_and_empty(self):
         all_queues = Queue.all(connection=self._r)
         for queue in all_queues:
@@ -327,6 +337,11 @@ def main():
         if not first:
             print("Waiting...")
             time.sleep(10)
+
+            if monitor:
+                with monitor(monitor_slug=config["sentry"]["monitor"]):
+                    ...
+
         first = False
         with transaction_context(op="director", name=config["datacenter"]["name"]):
             # maintenance: clear function cache
@@ -347,7 +362,11 @@ def main():
             # upload results
             with span_context(op="upload_results"):
                 for rqid in localredis.to_upload:
-                    job = rq.job.Job.fetch(rqid, connection=localredis._r)
+                    try:
+                        job = rq.job.Job.fetch(rqid, connection=localredis._r)
+                    except rq.exceptions.NoSuchJobError:
+                        localredis.remove_from_registry(rqid)
+                        continue
                     payload = job.result
                     try:
                         hmq.api.store_results([payload])

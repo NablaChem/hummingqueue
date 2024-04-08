@@ -10,3 +10,7 @@ envs = "/home/groups/nablachem/hmq/envs"
 binaries = "/home/groups/nablachem/hmq/bin"
 tmpdir = "/home/groups/nablachem/hmq/tmp"
 maxjobs = 20
+
+[sentry]
+director = "..."
+monitor = "..."
