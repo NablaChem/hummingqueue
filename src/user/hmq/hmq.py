@@ -17,6 +17,7 @@ import warnings
 import functools
 import numpy as np
 import pandas as pd
+import secrets
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
@@ -796,6 +797,8 @@ class CachedWorker(Worker):
     def execute_job(self, job, queue):
         payload = self.connection.hget("hmq:functions", job.kwargs["function"])
         api.warm_cache(job.kwargs["function"], json.loads(payload.decode("ascii")))
+        # re-seed numpy random state
+        np.random.seed(int.from_bytes(secrets.token_bytes(4)))
         return super().execute_job(job, queue)
 
 
