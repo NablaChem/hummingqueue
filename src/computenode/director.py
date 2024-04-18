@@ -262,6 +262,10 @@ class RedisManager:
             except:
                 pass
             try:
+                rq.command.send_stop_job_command(self._r, rqid)
+            except:
+                pass
+            try:
                 job.cancel()
                 job.delete()
             except:
@@ -342,9 +346,10 @@ def main():
             print("Waiting...")
             time.sleep(10)
 
+            # send heartbeat for monitoring
             if monitor:
                 with monitor(monitor_slug=config["sentry"]["monitor"]):
-                    ...
+                    pass
 
         first = False
         with transaction_context(op="director", name=config["datacenter"]["name"]):
