@@ -217,6 +217,48 @@ class TasksInspect(BaseModel):
     )
 
 
+class TasksSync(BaseModel):
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    datacenter: str = Field(..., description="Datacenter checking in.")
+    known: List[str] = Field(
+        ..., description="List of task ids of which to query the status."
+    )
+
+
+@app.post("/tasks/sync", tags=["compute"])
+def task_sync(body: TasksSync):
+    verify_challenge(body.challenge)
+
+    lost = []
+    stale = set(body.known)
+    for task in auth.db.tasks.find(
+        {"on_datacenter": body.datacenter, "status": "queued"}
+    ):
+        if task["id"] not in body.known:
+            lost.append(task["id"])
+        else:
+            stale.remove(task["id"])
+
+    # for all in lost: set status to pending and remove on_datacenter
+    auth.db.tasks.update_many(
+        {"id": {"$in": lost}},
+        {"$set": {"status": "pending"}, "$unset": {"on_datacenter": 1}},
+    )
+
+    return list(stale)
+
+
+@app.post("/tasks/inspect", tags=["compute"])
+def task_inspect(body: TasksInspect):
+    verify_challenge(body.challenge)
+
+    result = {_: None for _ in body.tasks}
+    for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
+        result[task["id"]] = task["status"]
+
+    return result
+
+
 @app.post("/tasks/inspect", tags=["compute"])
 def task_inspect(body: TasksInspect):
     verify_challenge(body.challenge)
@@ -444,7 +486,13 @@ def tasks_dequeue(body: TasksDequeue):
                     "inflight": None,
                     "_id": {"$in": candidate_ids},
                 },
-                {"$set": {"status": "queued", "inflight": runid}},
+                {
+                    "$set": {
+                        "status": "queued",
+                        "inflight": runid,
+                        "on_datacenter": body.datacenter,
+                    }
+                },
             )
             inflight = auth.db.tasks.find({"status": "queued", "inflight": runid})
             for task in inflight:

@@ -249,6 +249,14 @@ class RedisManager:
     def hmqids(self) -> list[str]:
         return [_.decode("ascii") for _ in self._r.hkeys("hmq:hmq2rq")]
 
+    def clean_hmq2rq(self):
+        """Remove entries from the mapping where the rq job no longer exists."""
+        for hmqid, rqid in self._r.hgetall("hmq:hmq2rq").items():
+            try:
+                rq.job.Job.fetch(rqid, connection=self._r)
+            except rq.exceptions.NoSuchJobError:
+                self.cancel_and_delete(hmqid)
+
     def cancel_and_delete(self, hmqid: str):
         rqid = self._r.hget("hmq:hmq2rq", hmqid).decode("ascii")
         job = None
@@ -384,6 +392,15 @@ def main():
                     localredis.remove_map_entry(payload["task"])
                     Result.delete_all(job)
                     job.delete()
+
+            # sync open work
+            with span_context(op="sync_tasks"):
+                localredis.clean_hmq2rq()
+                stale = hmq.api.sync_tasks(
+                    datacenter=config["datacenter"]["name"], known=localredis.hmqids
+                )
+                for hmqid in stale:
+                    localredis.cancel_and_delete(hmqid)
 
             # add more work to the queues
             with span_context(op="add_more_work"):

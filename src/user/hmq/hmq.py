@@ -395,6 +395,15 @@ class API:
         tasks = self._post("/tasks/find", payload)
         return tasks
 
+    def sync_tasks(self, datacenter: str, known: list[str]) -> list[str]:
+        payload = {
+            "datacenter": datacenter,
+            "known": known,
+            "challenge": self._get_challenge(),
+        }
+        stale = self._post("/tasks/sync", payload)
+        return stale
+
     def get_tasks_status(self, tasks: list[str]):
         payload = {
             "tasks": tasks,
