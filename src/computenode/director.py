@@ -190,7 +190,7 @@ class RedisManager:
         all_queues = Queue.all(connection=self._r)
         awaiting = []
         for q in all_queues:
-            if q.count > 0 and q.count > q.started_job_registry.count:
+            if q.count > 0:
                 awaiting.append(q.name)
         return awaiting
 
