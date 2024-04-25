@@ -223,18 +223,30 @@ class RedisManager:
 
     def clear_idle_and_empty(self):
         all_queues = Queue.all(connection=self._r)
-        for queue in all_queues:
-            if queue.count > 0:
-                return False
-            if queue.started_job_registry.count > 0:
-                return False
-            if queue.failed_job_registry.count > 0:
-                return False
 
+        for queue in all_queues:
+            # all cases when to keep the queue
+            if queue.count > 0:
+                continue
+            if queue.started_job_registry.count > 0:
+                continue
+            if queue.failed_job_registry.count > 0:
+                continue
+
+            # intermediate jobs stuck?
+            if self._r.llen(queue.intermediate_queue_key) > 0:
+                worker = hmq.CachedWorker(queue.name, connection=self._r)
+                worker.clean_registries()
+                continue
+
+            # cleanup: drop full queue
             if queue.finished_job_registry.count == 0:
                 queue.delete(delete_jobs=True)
 
-        self._r.delete("hmq:functions")
+        # no queue left: delete function cache
+        all_queues = Queue.all(connection=self._r)
+        if len(all_queues) == 0:
+            self._r.delete("hmq:functions")
 
     def retry_failed_jobs(self):
         for queue in Queue.all(connection=self._r):
