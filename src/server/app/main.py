@@ -1,3 +1,6 @@
+from fastapi import FastAPI
+import os
+import sentry_sdk
 from fastapi.responses import HTMLResponse
 import threading
 from . import maintenance
@@ -5,7 +8,11 @@ from .routers import security
 
 counter = 0
 
-from fastapi import FastAPI
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN"),
+    traces_sample_rate=0.01,
+)
+
 
 app = FastAPI(
     docs_url=None,

@@ -495,6 +495,7 @@ def tasks_dequeue(body: TasksDequeue):
                 },
             )
             inflight = auth.db.tasks.find({"status": "queued", "inflight": runid})
+            inflights = 0
             for task in inflight:
                 if queue not in tasks:
                     tasks[queue] = []
@@ -507,9 +508,12 @@ def tasks_dequeue(body: TasksDequeue):
                     }
                 )
                 remaining -= 1
+                inflights += 1
                 logentries.append(
                     {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
                 )
+            if inflights == 0:
+                break
 
     # remove empty queues
     for queue in active_queues:

@@ -265,7 +265,7 @@ class RedisManager:
         """Remove entries from the mapping where the rq job no longer exists."""
         for hmqid, rqid in self._r.hgetall("hmq:hmq2rq").items():
             try:
-                rq.job.Job.fetch(rqid, connection=self._r)
+                rq.job.Job.fetch(rqid.decode("ascii"), connection=self._r)
             except rq.exceptions.NoSuchJobError:
                 self.cancel_and_delete(hmqid)
 
