@@ -231,7 +231,7 @@ class API:
                 pass
             self._box = SecretBox(self._computesecret)
 
-    def _encrypt(self, obj, raw=False):
+    def _encrypt(self, obj, raw=False) -> str:
         self._build_box()
 
         if raw:
@@ -376,18 +376,38 @@ class API:
         datacenters: list = None,
     ):
         calls = [self._encrypt(call) for call in calls]
-        callstr = json.dumps(calls)
-        calldigest = hashlib.sha256(callstr.encode("utf8")).hexdigest()
-        payload = {
-            "tag": tag,
-            "function": digest,
-            "calls": callstr,
-            "digest": calldigest,
-            "ncores": ncores,
-            "datacenters": datacenters,
-            "challenge": self._get_challenge(),
-        }
-        uuids = self._post("/tasks/submit", payload)
+
+        uuids = []
+        limit_mb = 14
+        limit = limit_mb * 1024 * 1024
+        while len(calls) > 0:
+            chunk = [calls.pop(0)]
+            chunk_length = len(chunk[0])
+            while chunk_length < limit and len(calls) > 0:
+                next_length = len(calls[0])
+                if chunk_length + next_length > limit:
+                    break
+                chunk.append(calls.pop(0))
+                chunk_length += len(chunk[-1])
+
+            if chunk_length > limit:
+                raise ValueError(
+                    f"Chunk size exceeded {limit_mb} MB limit: cannot submit task."
+                )
+
+            chunkstr = json.dumps(chunk)
+            chunk_digest = hashlib.sha256(chunkstr.encode("utf8")).hexdigest()
+            payload = {
+                "tag": tag,
+                "function": digest,
+                "calls": chunkstr,
+                "digest": chunk_digest,
+                "ncores": ncores,
+                "datacenters": datacenters,
+                "challenge": self._get_challenge(),
+            }
+            uuids += self._post("/tasks/submit", payload)
+
         return uuids
 
     def find_tasks(self, tag: str):
