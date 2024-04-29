@@ -463,7 +463,7 @@ def tasks_dequeue(body: TasksDequeue):
     logentries = []
     active_queues = [_["queue"] for _ in auth.db.active_queues.find()]
     random.shuffle(active_queues)
-    runid = random.randint(0, 10e6)
+    runid = time.time()
     limit_mb = 30
     payload_size = 0
     for queue in active_queues:
@@ -485,7 +485,7 @@ def tasks_dequeue(body: TasksDequeue):
                 {
                     "status": "pending",
                     "queues": queue,
-                    "inflight": None,
+                    "inflight": {"$lt": runid - 60},
                     "_id": {"$in": candidate_ids},
                 },
                 {
@@ -509,14 +509,14 @@ def tasks_dequeue(body: TasksDequeue):
                         "job_timeout": "6h",
                     }
                 )
-                payload_size += len(task["call"])
-                if payload_size > limit_mb * 1024 * 1024:
-                    break
                 remaining -= 1
                 inflights += 1
                 logentries.append(
                     {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
                 )
+                payload_size += len(task["call"])
+                if payload_size > limit_mb * 1024 * 1024:
+                    break
             if inflights == 0 or payload_size > limit_mb * 1024 * 1024:
                 break
 
