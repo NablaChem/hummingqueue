@@ -464,6 +464,8 @@ def tasks_dequeue(body: TasksDequeue):
     active_queues = [_["queue"] for _ in auth.db.active_queues.find()]
     random.shuffle(active_queues)
     runid = random.randint(0, 10e6)
+    limit_mb = 30
+    payload_size = 0
     for queue in active_queues:
         m = re.match(regex, queue)
         if m is None:
@@ -507,12 +509,15 @@ def tasks_dequeue(body: TasksDequeue):
                         "job_timeout": "6h",
                     }
                 )
+                payload_size += len(task["call"])
+                if payload_size > limit_mb * 1024 * 1024:
+                    break
                 remaining -= 1
                 inflights += 1
                 logentries.append(
                     {"event": "task/dispatch", "id": task["id"], "ts": time.time()}
                 )
-            if inflights == 0:
+            if inflights == 0 or payload_size > limit_mb * 1024 * 1024:
                 break
 
     # remove empty queues
