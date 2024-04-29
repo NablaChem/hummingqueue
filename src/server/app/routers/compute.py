@@ -485,7 +485,7 @@ def tasks_dequeue(body: TasksDequeue):
                 {
                     "status": "pending",
                     "queues": queue,
-                    "inflight": {"$lt": runid - 60},
+                    "$or": [{"inflight": {"$lt": runid - 60}}, {"inflight": None}],
                     "_id": {"$in": candidate_ids},
                 },
                 {
