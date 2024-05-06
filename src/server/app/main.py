@@ -4,8 +4,7 @@ import sentry_sdk
 from fastapi.responses import HTMLResponse
 import threading
 import random
-from dateutil import parser
-from datetime import timedelta
+import datetime as dt
 from . import maintenance
 from .routers import security
 
@@ -14,15 +13,17 @@ counter = 0
 
 def endpoint_importance_sampling(event, hint):
     sample_rate = 0.001
-    report_everything_above = timedelta(milliseconds=500)
-    report_very_rarely_below = timedelta(milliseconds=5)
+    report_everything_above = dt.timedelta(milliseconds=500)
+    report_very_rarely_below = dt.timedelta(milliseconds=5)
     very_rarely_factor = 0.001
 
     start_time = event.get("start_timestamp")
     end_time = event.get("timestamp")
     if start_time and end_time:
         try:
-            duration = parser.parse(end_time) - parser.parse(start_time)
+            start_time = dt.datetime.fromisoformat(start_time)
+            end_time = dt.datetime.fromisoformat(end_time)
+            duration = end_time - start_time
 
             if duration >= report_everything_above:
                 sample_rate = 1
