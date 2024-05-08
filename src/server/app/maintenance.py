@@ -161,6 +161,20 @@ def update_stats(last_update: float):
     # track tags
     tagdetails = auth.db.tasks.aggregate(
         [
+            {"$match": {"received": {"$gt": time.time() - 7 * 24 * 60 * 60}}},
+            {
+                "$project": {
+                    "call": 0,
+                    "id": 0,
+                    "datacenters": 0,
+                    "function": 0,
+                    "inflight": 0,
+                    "queues": 0,
+                    "on_datacenter": 0,
+                    "error": 0,
+                    "result": 0,
+                }
+            },
             {
                 "$group": {
                     "_id": {"tag": "$tag", "ncores": "$ncores", "status": "$status"},
@@ -172,7 +186,7 @@ def update_stats(last_update: float):
                     "received": {"$min": "$received"},
                     "updated": {"$max": "$done"},
                 }
-            }
+            },
         ]
     )
 
