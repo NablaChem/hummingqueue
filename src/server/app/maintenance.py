@@ -226,7 +226,8 @@ def update_stats(last_update: float):
         else:
             continue
         tags[tag]["computetime"] += line["ncores"] * line["totalduration"]
-    auth.db.stats_tags.insert_many([_ for _ in tags.values()])
+    if len(tags) > 0:
+        auth.db.stats_tags.insert_many([_ for _ in tags.values()])
     auth.db.stats_tags.delete_many({"ts": {"$lt": now}})
     return now
 
