@@ -4,6 +4,7 @@ import pandas as pd
 import human_readable
 import requests
 import datetime as dt
+import time
 from streamlit_autorefresh import st_autorefresh
 
 
@@ -30,7 +31,6 @@ st_autorefresh(interval=60 * 1000)
 st.title("Hummingqueue Dashboard")
 st.text("The data is updated once a minute.")
 queue, datacenters = st.tabs(["Queue", "Datacenters"])
-
 
 result = requests.get("http://hmq.nablachem.org/queue/inspect")
 
@@ -112,19 +112,6 @@ with queue:
         use_container_width=True,
     )
 
-# tags
-result = requests.get("http://hmq.nablachem.org/tags/inspect")
-df = pd.DataFrame(result.json())
-df = df.sort_values("updated", ascending=False)
-del df["ts"]
-import time
-
-df.received = time.time() - df.received
-df.updated = time.time() - df.updated
-df["total"] = df.completed + df.failed + df.deleted + df.pending + df.queued
-df["progress"] = ((df.completed + df.failed + df.deleted) / df.total) * 100
-df.progress.fillna(100, inplace=True)
-
 
 def T(x):
     return human_readable.time_delta(dt.timedelta(seconds=x)) + " ago"
@@ -160,25 +147,41 @@ def T2(x):
     return f"{seconds}s"
 
 
-df.received = df.received.apply(T)
-df.updated = df.updated.apply(T)
-df.computetime = df.computetime.apply(T2)
-with queue:
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "progress": st.column_config.ProgressColumn(
-                "Progress",
-                help="Tag completion",
-                format="%d%%",
-                min_value=0,
-                max_value=100,
-            ),
-        },
-        column_order="tag total progress completed failed queued pending deleted computetime received updated".split(),
-    )
+# tags
+result = requests.get("http://hmq.nablachem.org/tags/inspect")
+df = pd.DataFrame(result.json())
+if len(df) == 0:
+    df = None
+    with queue:
+        st.write("No tag history available.")
+else:
+    df = df.sort_values("updated", ascending=False)
+    del df["ts"]
+
+    df.received = time.time() - df.received
+    df.updated = time.time() - df.updated
+    df["total"] = df.completed + df.failed + df.deleted + df.pending + df.queued
+    df["progress"] = ((df.completed + df.failed + df.deleted) / df.total) * 100
+    df.progress.fillna(100, inplace=True)
+    df.received = df.received.apply(T)
+    df.updated = df.updated.apply(T)
+    df.computetime = df.computetime.apply(T2)
+    with queue:
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "progress": st.column_config.ProgressColumn(
+                    "Progress",
+                    help="Tag completion",
+                    format="%d%%",
+                    min_value=0,
+                    max_value=100,
+                ),
+            },
+            column_order="tag total progress completed failed queued pending deleted computetime received updated".split(),
+        )
 
 
 # datacenters
