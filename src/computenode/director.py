@@ -416,9 +416,7 @@ def main():
 
             # add more work to the queues
             with span_context(op="add_more_work"):
-                nslots = 3000 - localredis.total_jobs
-                if nslots <= 0:
-                    continue
+                nslots = max(0, 3000 - localredis.total_jobs)
 
                 qtasks = hmq.api.dequeue_tasks(
                     datacenter=config["datacenter"]["name"],
@@ -429,6 +427,8 @@ def main():
                     running=localredis.running_tasks,
                     used=localredis.busy_units,
                 )
+                if nslots == 0:
+                    continue
                 pyvers = []
                 for queuename, tasks in qtasks.items():
                     queue = rq.Queue(queuename, connection=localredis._r)
@@ -469,6 +469,14 @@ def main():
                         "binaries": config["datacenter"]["binaries"],
                         "partitions": config["datacenter"]["partitions"],
                     }
+                    try:
+                        if config["containers"]["method"] == "udocker":
+                            variables["udockerdir"] = config["containers"]["udockerdir"]
+                            variables["containermethod"] = config["containers"][
+                                "method"
+                            ]
+                    except:
+                        pass
                     slurm.submit_job(variables)
 
 
