@@ -427,23 +427,22 @@ def main():
                     running=localredis.running_tasks,
                     used=localredis.busy_units,
                 )
-                if nslots == 0:
-                    continue
-                pyvers = []
-                for queuename, tasks in qtasks.items():
-                    queue = rq.Queue(queuename, connection=localredis._r)
-                    version, numcores = parse_queue_name(queuename)
-                    if version is None:
-                        continue
-                    pyvers.append(version)
+                if nslots > 0:
+                    pyvers = []
+                    for queuename, tasks in qtasks.items():
+                        queue = rq.Queue(queuename, connection=localredis._r)
+                        version, numcores = parse_queue_name(queuename)
+                        if version is None:
+                            continue
+                        pyvers.append(version)
 
-                    for task in tasks:
-                        task["result_ttl"] = -1
-                        rq_job = queue.enqueue("hmq.unwrap", **task)
-                        localredis.add_map_entry(task["hmqid"], rq_job.id)
-                        localredis.cache_function(task["function"])
+                        for task in tasks:
+                            task["result_ttl"] = -1
+                            rq_job = queue.enqueue("hmq.unwrap", **task)
+                            localredis.add_map_entry(task["hmqid"], rq_job.id)
+                            localredis.cache_function(task["function"])
 
-                dependencies.meet_all(list(set(pyvers)))
+                    dependencies.meet_all(list(set(pyvers)))
 
             # submit one job for random populated queues with work to do
             with span_context(op="submit_jobs"):
