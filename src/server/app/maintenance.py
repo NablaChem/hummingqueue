@@ -159,22 +159,27 @@ def update_stats(last_update: float):
     )
 
     # track tags
-    tagdetails = auth.db.tasks.aggregate(
+    # identify tags with have work open or have been active in the last week
+    # there might be individual tasks which are older for a long-running tag
+    activetags = auth.db.tasks.aggregate(
         [
-            {"$match": {"received": {"$gt": time.time() - 7 * 24 * 60 * 60}}},
             {
-                "$project": {
-                    "call": 0,
-                    "id": 0,
-                    "datacenters": 0,
-                    "function": 0,
-                    "inflight": 0,
-                    "queues": 0,
-                    "on_datacenter": 0,
-                    "error": 0,
-                    "result": 0,
+                "$match": {
+                    "$or": [
+                        {"received": {"$gt": time.time() - 7 * 24 * 60 * 60}},
+                        {"status": {"$in": ["pending", "queued"]}},
+                    ]
                 }
             },
+            {"$group": {"_id": {"tag": "$tag"}, "tag": {"$first": "$tag"}}},
+        ]
+    )
+    activetags = [tag["_id"]["tag"] for tag in activetags]
+
+    # build stats for all such tags
+    tagdetails = auth.db.tasks.aggregate(
+        [
+            {"$match": {"tag": {"$in": activetags}}},
             {
                 "$group": {
                     "_id": {"tag": "$tag", "ncores": "$ncores", "status": "$status"},
