@@ -141,7 +141,7 @@ class SlurmManager:
     def idle_compute_units(self):
         if time.time() - self._idle_update_time > 60:
             cmd = (
-                f'sinfo -o "%n %e %a %C" -p {self._config["datacenter"]["partitions"]}'
+                f'sinfo -o "%n %m %a %C" -p {self._config["datacenter"]["partitions"]}'
             )
             try:
                 lines = subprocess.check_output(shlex.split(cmd)).splitlines()
@@ -160,6 +160,7 @@ class SlurmManager:
                 except:
                     continue
             self._idle_compute_units = sum(nodes.values())
+            self._idle_update_time = time.time()
 
         return self._idle_compute_units
 
