@@ -1,5 +1,6 @@
 import uuid
 import inspect
+import typing
 import sys
 import traceback
 import os
@@ -17,6 +18,8 @@ import warnings
 import functools
 import numpy as np
 import pandas as pd
+import sqlite3
+import zlib
 import secrets
 from pathlib import Path
 import nacl
@@ -611,43 +614,76 @@ api = API()
 
 
 class Tag:
+    """Represents a collection of tasks."""
+
     def __init__(self, name):
+        self._db = Tag._create_database()
         self.name = name + "_" + str(uuid.uuid4())
-        self.tasks = []
-        self._results = {}
-        self._errors = {}
 
-    def _add_uuids(self, uuids: list):
-        self.tasks += uuids
+    @property
+    def name(self) -> str:
+        return self._name
 
-    def to_file(self, filename):
-        meta = {
-            "name": self.name,
-            "ntasks": len(self.tasks),
-            "status": {
-                "PENDING": len(self.tasks) - len(self._results) - len(self._errors),
-                "DONE": len(self._results),
-                "FAILED": len(self._errors),
-            },
-        }
-        payload = ""
-        for task in self.tasks:
-            result = None
-            if task in self._results:
-                result = self._results[task]
-            error = None
-            if task in self._errors:
-                error = self._errors[task]
-            payload += (
-                json.dumps({"task": task, "result": result, "error": error}) + "\n"
-            )
-
-        with open(filename, "w") as f:
-            f.write(json.dumps(meta) + "\n" + payload)
+    @name.setter
+    def name(self, value):
+        self._name = value
+        self._db.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES ('name', ?)", (value,)
+        )
 
     @staticmethod
-    def from_queue(tag: str):
-        """Loads a tag from the queue by downloading all data (again). Use sparingly.
+    def _create_database() -> sqlite3.Connection:
+        """Creates an in-memory database for the tag with the current schema.
+
+        Returns
+        -------
+        sqlite3.Connection
+            The database.
+        """
+        db = sqlite3.connect(":memory:")
+        db.execute(
+            "CREATE TABLE tasks (task TEXT PRIMARY KEY, result BLOB, error BLOB) WITHOUT ROWID"
+        )
+        db.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+        return db
+
+    def _add_tasks(self, tasks: list[str]):
+        """Registers a list of tasks with the tag.
+
+        Parameters
+        ----------
+        tasks : list[str]
+            List of task IDs.
+        """
+        with self._db:
+            self._db.executemany(
+                "INSERT INTO tasks (task) VALUES (?)", [(task,) for task in tasks]
+            )
+
+    def to_file(self, filename: str, stay_linked: bool = False):
+        """Exports the current state to a file.
+
+        Parameters
+        ----------
+        filename : str
+            Export destination.
+        stay_linked: bool
+            If True, will switch this tag to a file-based database.
+        """
+        destination = sqlite3.connect(filename)
+        with destination:
+            self._db.backup(destination)
+        if stay_linked:
+            self._db.close()
+            self._db = destination
+        else:
+            destination.close()
+
+    @staticmethod
+    def from_queue(tag: str) -> "Tag":
+        """Loads a tag from the queue by downloading the corresponding tasks.
+
+        Does not pull results.
 
         Parameters
         ----------
@@ -661,87 +697,185 @@ class Tag:
         """
         t = Tag("")
         t.name = tag
-        t.tasks = api.find_tasks(tag)
-        t._results = {}
-        t._errors = {}
+        t._add_tasks(api.find_tasks(tag))
         return t
 
     @staticmethod
-    def from_file(filename: str):
+    def from_file(filename: str) -> "Tag":
+        """Loads a tag and all results for all tasks from a file.
+
+        Parameters
+        ----------
+        filename : str
+            Source file.
+
+        Returns
+        -------
+        Tag
+            The loaded tag.
+
+        Raises
+        ------
+        ValueError
+            If the file does not exist.
+        """
+        if not os.path.exists(filename):
+            raise ValueError("File does not exist.")
+
+        # detect whether file is a database or a text-based format
+        with open(filename, "rb") as f:
+            first_16_bytes = f.read(16)
+        if first_16_bytes.startswith(b"SQLite format 3"):
+            db = sqlite3.connect(filename)
+            t = Tag("")
+            t._db = db
+            t._name = db.execute(
+                "SELECT value FROM meta WHERE key = 'name'"
+            ).fetchone()[0]
+            return t
+
+        # support older text-based format
         meta = None
         tasks = []
-        results = {}
-        errors = {}
+        rows = []
         for line in open(filename):
             if meta is None:
                 meta = json.loads(line.strip())
             else:
                 row = json.loads(line.strip())
                 tasks.append(row["task"])
-                if row["result"] is not None:
-                    results[row["task"]] = row["result"]
-                if row["error"] is not None:
-                    errors[row["task"]] = row["error"]
+                rows.append((row["task"], row["result"], row["error"]))
 
+        # convert to modern database format
         t = Tag("")
         t.name = meta["name"]
-        t.tasks = tasks
-        t._results = results
-        t._errors = errors
+        with t._db:
+            t._db.executemany(
+                "INSERT INTO tasks (task, result, error) VALUES (?, ?, ?)", rows
+            )
         return t
 
-    def _pull_batch(self, tasklist):
-        if len(tasklist) > 0:
-            results = api.retrieve_results(tasklist)
+    @staticmethod
+    def _to_blob(obj) -> bytes:
+        return zlib.compress(json.dumps(obj).encode("utf-8"))
+
+    @staticmethod
+    def _from_blob(blob: bytes):
+        return json.loads(zlib.decompress(blob).decode("utf-8"))
+
+    def _pull_batch(self, tasks: list[str]):
+        """Pulls data for a batch of tasks.
+
+        Parameters
+        ----------
+        tasks : list[str]
+            Task IDs.
+        """
+        if len(tasks) > 0:
+            results = api.retrieve_results(tasks)
+            updates = []
             for task, result in results.items():
                 if result is not None:
-                    if result["result"] is not None:
-                        self._results[task] = result["result"]
-                    else:
-                        self._errors[task] = result["error"]
+                    updates.append(
+                        (
+                            Tag._to_blob(result["result"]),
+                            Tag._to_blob(result["error"]),
+                            task,
+                        )
+                    )
 
-    def pull(self, blocking=False) -> int:
-        remaining = len(self.tasks) - len(self._results) - len(self._errors)
-        while remaining > 0:
+            with self._db:
+                self._db.executemany(
+                    "UPDATE tasks SET result = ?, error = ? WHERE task = ?", updates
+                )
+
+    @property
+    def _open_tasks(self) -> list[str]:
+        """Finds all tasks without results or errors.
+
+        Returns
+        -------
+        list[str]
+            Task IDs.
+        """
+        open_tasks = self._db.execute(
+            "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
+        ).fetchall()
+        return [_[0] for _ in open_tasks]
+
+    def pull(self, blocking: bool = False, batchsize: int = 100) -> int:
+        """Downloads data from the queue for all tasks in the tag.
+
+        Parameters
+        ----------
+        blocking : bool, optional
+            Whether to retry downloading until all data has been fetched, by default False
+        batchsize : int, optional
+            Number of tasks to download at once, by default 100.
+
+        Returns
+        -------
+        int
+            Number of remaining tasks for which neither result nor error is available.
+        """
+        open_tasks = self._open_tasks
+        total_tasks = self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        while len(open_tasks) > 0:
             tasklist = []
-            for task in tqdm.tqdm(self.tasks):
-                if task not in self._results and task not in self._errors:
-                    tasklist.append(task)
-                if len(tasklist) > 50:
+            for task in tqdm.tqdm(
+                open_tasks,
+                desc="Pulling",
+                unit="tasks",
+                initial=total_tasks - len(open_tasks),
+            ):
+                tasklist.append(task)
+                if len(tasklist) == batchsize:
                     self._pull_batch(tasklist)
                     tasklist = []
             self._pull_batch(tasklist)
-            remaining = len(self.tasks) - len(self._results) - len(self._errors)
             if not blocking:
                 break
             time.sleep(5)
+        remaining = self._db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
+        ).fetchone()[0]
         return remaining
 
     def delete(self):
-        remaining_tasks = (
-            set(self.tasks) - set(self._results.keys()) - set(self._errors.keys())
-        )
-        api.delete_tasks(list(remaining_tasks))
+        """Delete all remaining tasks from the queue, i.e. abort the remaining calculations."""
+        api.delete_tasks(self._open_tasks)
 
     @property
-    def results(self):
-        res = []
-        for task in self.tasks:
-            if task in self._results:
-                res.append(self._results[task])
-            else:
-                res.append(None)
-        return res
+    def results(self) -> typing.Generator[str, None, None]:
+        """Generator of all results.
+
+        The ordering is stable as long as no tasks are added. This ordering is not the same as the order of submission.
+
+        Returns
+        -------
+        typing.Generator[str, None, None]
+            Results, or None if the task has not been completed or an error occurred.
+        """
+        for (result,) in self._db.execute(
+            "SELECT result FROM tasks ORDER BY task"
+        ).fetchall():
+            yield Tag._from_blob(result)
 
     @property
-    def errors(self):
-        res = []
-        for task in self.tasks:
-            if task in self._errors:
-                res.append(self._errors[task])
-            else:
-                res.append(None)
-        return res
+    def errors(self) -> typing.Generator[str, None, None]:
+        """Generator of all errors.
+
+        The ordering is stable as long as no tasks are added. This ordering is not the same as the order of submission.
+
+        Returns
+        -------
+        typing.Generator[str, None, None]
+            Results, or None if the task has not been completed or an error occurred.
+        """
+        for (error,) in self._db.execute(
+            "SELECT error FROM tasks ORDER BY task"
+        ).fetchall():
+            yield Tag._from_blob(error)
 
 
 def request_access(url: str):
@@ -795,7 +929,7 @@ def task(func=None, **defaultkwargs):
                 datacenters = []
             else:
                 datacenters = [dc.strip() for dc in datacenters.split(",")]
-            tag._add_uuids(
+            tag._add_tasks(
                 api.submit_tasks(tag.name, digest, func._calls, ncores, datacenters)
             )
             func._calls = []
