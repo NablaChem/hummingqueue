@@ -9,6 +9,7 @@ import importlib.metadata
 import requests
 import base64
 import socket
+import requests.adapters
 import urllib3
 import cloudpickle
 import json
@@ -284,6 +285,16 @@ class API:
     def _init_session(self):
         if self._session is None:
             self._session = requests.Session()
+            retries = urllib3.util.Retry(
+                total=None,
+                connect=None,
+                read=None,
+                backoff_factor=0.5,
+                status_forcelist=[502, 503, 504],
+            )
+            adapter = requests.adapters.HTTPAdapter(max_retries=retries)
+            self._session.mount("https://", adapter)
+            self._session.mount("http://", adapter)
 
     def _post(self, endpoint, payload):
         self._init_session()
@@ -383,33 +394,36 @@ class API:
         uuids = []
         limit_mb = 14
         limit = limit_mb * 1024 * 1024
-        while len(calls) > 0:
-            chunk = [calls.pop(0)]
-            chunk_length = len(chunk[0])
-            while chunk_length < limit and len(calls) > 0:
-                next_length = len(calls[0])
-                if chunk_length + next_length > limit:
-                    break
-                chunk.append(calls.pop(0))
-                chunk_length += len(chunk[-1])
+        with tqdm.tqdm(total=len(calls), desc="Submitting tasks") as pbar:
+            while len(calls) > 0:
+                chunk = [calls.pop(0)]
+                chunk_length = len(chunk[0])
+                while chunk_length < limit and len(calls) > 0 and len(chunk) < 500:
+                    next_length = len(calls[0])
+                    if chunk_length + next_length > limit:
+                        break
+                    chunk.append(calls.pop(0))
+                    chunk_length += len(chunk[-1])
 
-            if chunk_length > limit:
-                raise ValueError(
-                    f"Chunk size exceeded {limit_mb} MB limit: cannot submit task."
-                )
+                if chunk_length > limit:
+                    raise ValueError(
+                        f"Chunk size exceeded {limit_mb} MB limit: cannot submit task."
+                    )
 
-            chunkstr = json.dumps(chunk)
-            chunk_digest = hashlib.sha256(chunkstr.encode("utf8")).hexdigest()
-            payload = {
-                "tag": tag,
-                "function": digest,
-                "calls": chunkstr,
-                "digest": chunk_digest,
-                "ncores": ncores,
-                "datacenters": datacenters,
-                "challenge": self._get_challenge(),
-            }
-            uuids += self._post("/tasks/submit", payload)
+                pbar.update(len(chunk))
+
+                chunkstr = json.dumps(chunk)
+                chunk_digest = hashlib.sha256(chunkstr.encode("utf8")).hexdigest()
+                payload = {
+                    "tag": tag,
+                    "function": digest,
+                    "calls": chunkstr,
+                    "digest": chunk_digest,
+                    "ncores": ncores,
+                    "datacenters": datacenters,
+                    "challenge": self._get_challenge(),
+                }
+                uuids += self._post("/tasks/submit", payload)
 
         return uuids
 
