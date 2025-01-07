@@ -271,7 +271,10 @@ class RedisManager:
                 self.cancel_and_delete(hmqid)
 
     def cancel_and_delete(self, hmqid: str):
-        rqid = self._r.hget("hmq:hmq2rq", hmqid).decode("ascii")
+        try:
+            rqid = self._r.hget("hmq:hmq2rq", hmqid).decode("ascii")
+        except:
+            return
         job = None
         try:
             job = rq.job.Job.fetch(rqid, connection=self._r)
@@ -467,7 +470,7 @@ def main():
                         "redis_host": config["datacenter"]["redis_host"],
                         "redis_pass": config["datacenter"]["redis_pass"],
                         "binaries": config["datacenter"]["binaries"],
-                        "partitions": config["datacenter"]["partitions"],
+                        "partitions": random.choice(config["datacenter"]["partitions"].split(",")),
                     }
                     try:
                         if config["containers"]["method"] == "udocker":
