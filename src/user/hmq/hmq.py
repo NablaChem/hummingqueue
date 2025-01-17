@@ -449,11 +449,16 @@ class API:
         return self._post("/tasks/inspect", payload)
 
     def delete_tasks(self, tasks: list[str]):
-        payload = {
-            "delete": tasks,
-            "challenge": self._get_challenge(),
-        }
-        deleted = self._post("/tasks/delete", payload)
+        deleted = []
+        while len(tasks) > 0:
+            chunk = tasks[:500]
+            tasks = tasks[500:]
+
+            payload = {
+                "delete": chunk,
+                "challenge": self._get_challenge(),
+            }
+            deleted += self._post("/tasks/delete", payload)
         return deleted
 
     def fetch_function(self, function: str):
@@ -771,10 +776,14 @@ class Tag:
 
     @staticmethod
     def _to_blob(obj) -> bytes:
+        if obj is None:
+            return b""
         return zlib.compress(json.dumps(obj).encode("utf-8"))
 
     @staticmethod
     def _from_blob(blob: bytes):
+        if blob is None or len(blob) == 0:
+            return None
         return json.loads(zlib.decompress(blob).decode("utf-8"))
 
     def _pull_batch(self, tasks: list[str]):
@@ -791,16 +800,17 @@ class Tag:
             for task, result in results.items():
                 if result is not None:
                     updates.append(
-                        (
-                            Tag._to_blob(result["result"]),
-                            Tag._to_blob(result["error"]),
-                            task,
-                        )
+                        {
+                            "result": Tag._to_blob(result["result"]),
+                            "error": Tag._to_blob(result["error"]),
+                            "taskid": task,
+                        }
                     )
 
             with self._db:
                 self._db.executemany(
-                    "UPDATE tasks SET result = ?, error = ? WHERE task = ?", updates
+                    "UPDATE tasks SET result = :result, error = :error WHERE task = :taskid",
+                    updates,
                 )
 
     @property
