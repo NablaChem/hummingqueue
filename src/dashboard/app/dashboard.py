@@ -32,7 +32,7 @@ st.title("Hummingqueue Dashboard")
 st.text("The data is updated once a minute.")
 queue, datacenters = st.tabs(["Queue", "Datacenters"])
 
-result = requests.get("http://hmq.nablachem.org/queue/inspect")
+result = requests.get("http://hmq/queue/inspect")
 
 rows = []
 for minutes_ago, data in result.json().items():
@@ -148,7 +148,7 @@ def T2(x):
 
 
 # tags
-result = requests.get("http://hmq.nablachem.org/tags/inspect")
+result = requests.get("http://hmq/tags/inspect")
 df = pd.DataFrame(result.json())
 if len(df) == 0:
     df = None
@@ -185,7 +185,7 @@ else:
 
 
 # datacenters
-result = requests.get("http://hmq.nablachem.org/datacenters/inspect")
+result = requests.get("http://hmq/datacenters/inspect")
 rows = []
 for datacenter, last_seen in result.json().items():
     explained = human_readable.time_delta(dt.timedelta(seconds=last_seen))
