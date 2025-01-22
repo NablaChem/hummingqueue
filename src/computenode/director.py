@@ -442,9 +442,9 @@ def main():
 
                         for task in tasks:
                             task["result_ttl"] = -1
+                            localredis.cache_function(task["function"])
                             rq_job = queue.enqueue("hmq.unwrap", **task)
                             localredis.add_map_entry(task["hmqid"], rq_job.id)
-                            localredis.cache_function(task["function"])
 
                     dependencies.meet_all(list(set(pyvers)))
 
@@ -470,7 +470,9 @@ def main():
                         "redis_host": config["datacenter"]["redis_host"],
                         "redis_pass": config["datacenter"]["redis_pass"],
                         "binaries": config["datacenter"]["binaries"],
-                        "partitions": random.choice(config["datacenter"]["partitions"].split(",")),
+                        "partitions": random.choice(
+                            config["datacenter"]["partitions"].split(",")
+                        ),
                     }
                     try:
                         if config["containers"]["method"] == "udocker":
