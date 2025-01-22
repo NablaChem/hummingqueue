@@ -982,8 +982,10 @@ def unwrap(hmqid: str, call: str, function: str):
 
 class CachedWorker(Worker):
     def execute_job(self, job, queue):
-        payload = self.connection.hget("hmq:functions", job.kwargs["function"])
-        api.warm_cache(job.kwargs["function"], json.loads(payload.decode("ascii")))
+        if job.kwargs["function"] not in functions:
+            payload = self.connection.hget("hmq:functions", job.kwargs["function"])
+            api.warm_cache(job.kwargs["function"], json.loads(payload.decode("ascii")))
+
         # re-seed numpy random state
         np.random.seed(int.from_bytes(secrets.token_bytes(4)))
         return super().execute_job(job, queue)
