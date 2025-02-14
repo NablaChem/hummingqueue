@@ -860,6 +860,7 @@ class Tag:
             self._pull_batch(tasklist)
             if not blocking:
                 break
+            open_tasks = self._open_tasks
             time.sleep(5)
         remaining = self._db.execute(
             "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
