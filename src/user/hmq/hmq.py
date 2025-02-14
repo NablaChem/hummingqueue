@@ -22,6 +22,7 @@ import pandas as pd
 import sqlite3
 import zlib
 import secrets
+import shutil
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
@@ -981,7 +982,29 @@ def unwrap(hmqid: str, call: str, function: str):
 
 
 class CachedWorker(Worker):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._hmq_basedir = os.getcwd()
+
+    def _enter_working_directory(self):
+        """Enters working directory and clears it if possible."""
+        os.chdir(self._hmq_basedir)
+
+        for item in os.listdir():
+            if os.path.isfile(item):
+                try:
+                    os.unlink(item)
+                except:
+                    pass
+            else:
+                try:
+                    shutil.rmtree(item)
+                except:
+                    pass
+
     def execute_job(self, job, queue):
+        self._enter_working_directory()
+
         if job.kwargs["function"] not in functions:
             payload = self.connection.hget("hmq:functions", job.kwargs["function"])
             api.warm_cache(job.kwargs["function"], json.loads(payload.decode("ascii")))
