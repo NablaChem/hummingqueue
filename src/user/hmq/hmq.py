@@ -654,6 +654,7 @@ class Tag:
 
     def __init__(self, name):
         self._db = Tag._create_database()
+        self._in_memory = True
         self.name = name + "_" + str(uuid.uuid4())
 
     def __len__(self):
@@ -715,6 +716,7 @@ class Tag:
         if stay_linked:
             self._db.close()
             self._db = destination
+            self._in_memory = False
         else:
             destination.close()
 
@@ -770,6 +772,7 @@ class Tag:
             db = sqlite3.connect(filename)
             t = Tag("")
             t._db = db
+            t._in_memory = False
             t._name = db.execute(
                 "SELECT value FROM meta WHERE key = 'name'"
             ).fetchone()[0]
@@ -865,6 +868,11 @@ class Tag:
             Number of remaining tasks for which neither result nor error is available.
         """
         open_tasks = self._open_tasks
+        if len(open_tasks) > 10000 and self._in_memory:
+            print(
+                "Warning: large number of tasks held in memory. Consider switching to a file-based database via .to_file()."
+            )
+
         total_tasks = self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
         while len(open_tasks) > 0:
             tasklist = []
