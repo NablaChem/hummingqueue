@@ -413,6 +413,50 @@ def inspect_tags():
     return results
 
 
+class InspectTagRequest(BaseModel):
+    tag: str = Field(..., description="Tag to filter tasks by")
+
+
+class TagStatusResponse(BaseModel):
+    completed: int
+    pending: int
+    queued: int
+    deleted: int
+    failed: int
+    total: int
+
+
+@app.post(
+    "/tag/inspect",
+    tags=["statistics"],
+    response_model=TagStatusResponse,
+    summary="Inspect tag statistics",
+)
+def inspect_tag(request: InspectTagRequest):
+    """
+    Fetch task statistics for a given tag.
+
+    - **tag**: The tag used to filter tasks.
+    - Returns a summary of task counts grouped by status.
+    """
+
+    pipeline = [
+        {"$match": {"tag": request.tag}},
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}},
+    ]
+
+    fields = ["error", "completed", "pending", "queued", "deleted"]
+    status: Dict[str, int] = {field: 0 for field in fields}
+
+    for record in auth.db.tasks.aggregate(pipeline):
+        status[record["_id"]] = record["count"]
+
+    status["failed"] = status.pop("error")
+    status["total"] = sum(status.values())
+
+    return status
+
+
 @app.get("/datacenters/inspect", tags=["statistics"])
 def inspect_usage():
     now = time.time()

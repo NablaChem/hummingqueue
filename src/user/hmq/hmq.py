@@ -449,6 +449,22 @@ class API:
         }
         return self._post("/tasks/inspect", payload)
 
+    def get_tag_status(self, tag: str) -> dict[str, int]:
+        """
+        Fetch task statistics for a given tag.
+
+        Args:
+            tag (str): The tag to inspect.
+
+        Returns:
+            Optional[Dict[str, int]]: Task status counts if successful, None otherwise.
+        """
+        payload = {
+            "tag": tag,
+            "challenge": self._get_challenge(),
+        }
+        return self._post("/tag/inspect", payload)
+
     def delete_tasks(self, tasks: list[str]):
         deleted = []
         while len(tasks) > 0:
@@ -639,6 +655,9 @@ class Tag:
     def __init__(self, name):
         self._db = Tag._create_database()
         self.name = name + "_" + str(uuid.uuid4())
+
+    def __len__(self):
+        return self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
 
     @property
     def name(self) -> str:
