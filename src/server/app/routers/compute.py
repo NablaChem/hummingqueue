@@ -275,13 +275,7 @@ class TasksFind(BaseModel):
     tag: str = Field(..., description="Tag of which to list all tasks.")
 
 
-class TasksFindResponse(BaseModel):
-    task_ids: List[str] = Field(
-        ..., description="List of task IDs matching the given tag."
-    )
-
-
-@app.post("/tasks/find", tags=["compute"], response_model=TasksFindResponse)
+@app.post("/tasks/find", tags=["compute"], response_model=list[str])
 def tasks_find(body: TasksFind):
     """
     Retrieves a list of task IDs based on the given tag.

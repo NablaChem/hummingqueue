@@ -7,4 +7,5 @@ pytest
 requests
 pytest-cov
 shortuuid
-starlette-compressw
+starlette-compress
+sentry-sdk
