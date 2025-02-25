@@ -736,6 +736,8 @@ class Tag:
         """
         t = Tag("")
         t.name = tag
+        total = api.get_tag_status(tag)["total"]
+        print(f"Found {total} tasks.")
         t._add_tasks(api.find_tasks(tag))
         return t
 

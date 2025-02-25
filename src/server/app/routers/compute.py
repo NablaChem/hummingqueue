@@ -275,13 +275,27 @@ class TasksFind(BaseModel):
     tag: str = Field(..., description="Tag of which to list all tasks.")
 
 
-@app.post("/tasks/find", tags=["compute"])
-def task_find(body: TasksFind):
+class TasksFindResponse(BaseModel):
+    task_ids: List[str] = Field(
+        ..., description="List of task IDs matching the given tag."
+    )
+
+
+@app.post("/tasks/find", tags=["compute"], response_model=TasksFindResponse)
+def tasks_find(body: TasksFind):
+    """
+    Retrieves a list of task IDs based on the given tag.
+
+    - **challenge**: Encrypted challenge for authentication.
+    - **tag**: The tag to filter tasks.
+    - Returns: A list of task IDs.
+    """
     verify_challenge(body.challenge)
 
-    result = []
-    for task in auth.db.tasks.find({"tag": body.tag}):
-        result.append(task["id"])
+    result = [
+        task["id"]
+        for task in auth.db.tasks.find({"tag": body.tag}, {"id": 1, "_id": 0})
+    ]
 
     return result
 

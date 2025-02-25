@@ -7,6 +7,7 @@ import random
 import datetime as dt
 from . import maintenance
 from .routers import security
+from starlette_compress import CompressMiddleware
 
 counter = 0
 
@@ -52,6 +53,9 @@ app = FastAPI(
 Hummingqueue is an open-source, self-hosted, distributed, and scalable job queue for scientific computing.
 """,
 )
+
+# enable transparent compression
+app.add_middleware(CompressMiddleware)
 
 # add routes
 routes = ["compute", "communication", "security"]
