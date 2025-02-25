@@ -852,7 +852,12 @@ class Tag:
         ).fetchall()
         return [_[0] for _ in open_tasks]
 
-    def pull(self, blocking: bool = False, batchsize: int = 100) -> int:
+    def pull(
+        self,
+        blocking: bool = False,
+        batchsize: int = 100,
+        tasks_subset: list[str] = None,
+    ) -> int:
         """Downloads data from the queue for all tasks in the tag.
 
         Parameters
@@ -861,6 +866,8 @@ class Tag:
             Whether to retry downloading until all data has been fetched, by default False
         batchsize : int, optional
             Number of tasks to download at once, by default 100.
+        tasks_subset : list[str], optional
+            Subset of tasks to download, by default None.
 
         Returns
         -------
@@ -868,6 +875,8 @@ class Tag:
             Number of remaining tasks for which neither result nor error is available.
         """
         open_tasks = self._open_tasks
+        if tasks_subset is not None:
+            open_tasks = [t for t in open_tasks if t in tasks_subset]
         if len(open_tasks) > 10000 and self._in_memory:
             print(
                 "Warning: large number of tasks held in memory. Consider switching to a file-based database via .to_file()."
