@@ -1,4 +1,6 @@
 __pycache__
+server/app/VERSION
+user/build
 env.prod.yml
 SSLcertificates
 env.prod.SSL.yml
