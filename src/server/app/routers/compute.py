@@ -42,6 +42,7 @@ def verify_challenge(signed_challenge):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Old challenge"
         )
+    return user
 
 
 class FunctionRegister(BaseModel):
@@ -180,7 +181,9 @@ def tasks_submit(body: TaskSubmit):
 
 class TasksDelete(BaseModel):
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
-    delete: List[str] = Field(..., description="List of task ids to cancel and delete.")
+    delete: List[str] = Field(
+        ..., description="List of task ids to cancel and delete.", max_length=1000
+    )
 
 
 @app.post("/tasks/delete", tags=["compute"])
@@ -413,6 +416,51 @@ def inspect_tags():
     return results
 
 
+class TagsPriorise(BaseModel):
+    tags: list[str] = Field(..., description="Tags to update.")  # TODO min len = 1
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    priority: str = Field(
+        ..., description="Priority to apply."
+    )  # TODO: make enum: RUSH (finish first), STD (do next), LOW (only if nothing else)
+
+
+@app.get("/tags/priorise", tags=["compute"])
+def priorise_tags(body: TagsPriorise):
+    user = verify_challenge(body.challenge)
+
+    if body.priority == "RUSH":
+        if len(body.tags) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Only one RUSH tag allowed.",
+            )
+        auth.db.users.update_one(
+            {"_id": user._id},
+            {"$set": {"rush_tag": body.tags[0]}},
+        )
+        return
+
+    # un-RUSH
+    if "rush_tag" in user and user["rush_tag"] in body.tags:
+        auth.db.users.update_one(
+            {"_id": user._id},
+            {"$unset": ["rush_tag"]},
+        )
+
+    for tag in body.tags:
+        if body.priority == "LOW":
+            _ = {"tag": tag, "user": user["_id"]}
+            auth.db.backlog.update_one(
+                _,
+                {"$set": _},
+                upsert=True,
+            )
+            status[tag] = "ok"
+
+        if body.priority == "STD":
+            auth.db.backlog.delete({"tag": tag, "user": user["_id"]})
+
+
 @app.get("/datacenters/inspect", tags=["statistics"])
 def inspect_usage():
     now = time.time()
@@ -433,6 +481,34 @@ class TasksDequeue(BaseModel):
     allocated: int = Field(..., description="Number of allocated compute units.")
     running: int = Field(..., description="Number of running tasks.")
     used: int = Field(..., description="Number of used compute units.")
+
+
+def _get_priority_candidates(
+    rush_tags: list[str], low_tags: list[str], queue: str, remaining: int
+):
+    candidates = auth.db.tasks.find(
+        {"status": "pending", "queues": queue, "tag": {"$in": rush_tags}},
+        {"_id": 1},
+        limit=remaining,
+    )
+    candidate_ids = [_["_id"] for _ in candidates]
+    if len(candidate_ids) > 0:
+        return candidate_ids
+
+    candidates = auth.db.tasks.find(
+        {"status": "pending", "queues": queue, "tag": {"$nin": low_tags}},
+        {"_id": 1},
+        limit=remaining,  # NIN=not in
+    )
+    candidate_ids = [_["_id"] for _ in candidates]
+    if len(candidate_ids) > 0:
+        return candidate_ids
+
+    candidates = auth.db.tasks.find(
+        {"status": "pending", "queues": queue},
+        {"_id": 1},
+        limit=remaining,  # NIN=not in
+    )
 
 
 @app.post("/tasks/dequeue", tags=["compute"])
@@ -466,6 +542,11 @@ def tasks_dequeue(body: TasksDequeue):
     runid = time.time()
     limit_mb = 30
     payload_size = 0
+
+    # priority
+    rush_tags = ...
+    low_tags = ...
+
     for queue in active_queues:
         m = re.match(regex, queue)
         if m is None:
@@ -474,10 +555,7 @@ def tasks_dequeue(body: TasksDequeue):
             continue
 
         while remaining > 0:
-            candidates = auth.db.tasks.find(
-                {"status": "pending", "queues": queue}, {"_id": 1}, limit=remaining
-            )
-            candidate_ids = [_["_id"] for _ in candidates]
+            _get_priority_candidates()
             if len(candidate_ids) == 0:
                 break
 
