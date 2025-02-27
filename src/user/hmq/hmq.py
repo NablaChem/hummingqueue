@@ -65,6 +65,17 @@ class API:
         self._session = None
 
     def setup(self, url: str):
+        """Connect to queueing API.
+
+        Args:
+            url (str): The server URL.
+
+        Raises:
+            ValueError: Only one instance is supported.
+
+        Returns:
+            str: The signing request.
+        """
         config = configparser.ConfigParser()
         config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
 
@@ -106,6 +117,16 @@ class API:
         return f"ADD-USER_{verify_key}_{public_key}"
 
     def grant_access(self, signing_request: str, adminkey: str, username: str):
+        """Signs a user request and grants access.
+
+        Args:
+            signing_request (str): The signing request generated with setup().
+            adminkey (str): The admin key.
+            username (str): Arbitrary username to identify the user.
+
+        Raises:
+            ValueError: Admin key was not supported.
+        """
         self._build_box()
 
         prefix, verify_key, public_key = signing_request.split("_")
@@ -137,6 +158,11 @@ class API:
             raise ValueError("Cannot submit signature. Is the admin key correct?")
 
     def ping(self):
+        """Test connection to server.
+
+        Returns:
+            bool: Whether the server is reachable.
+        """
         self._build_box()
         try:
             response = self._get("/ping").content.decode("ascii")
@@ -144,7 +170,15 @@ class API:
             return False
         return response == "pong"
 
-    def _clean_instance(self, instance):
+    def _clean_instance(self, instance: str) -> str:
+        """Clean-up and verify instance URL.
+
+        Args:
+            instance (str): URL of the instance.
+
+        Returns:
+            str: The cleaned-up URL.
+        """
         self._verify = True
         if instance.endswith("hmq.localhost.nablachem.org"):
             urllib3.disable_warnings()
@@ -608,12 +642,10 @@ class API:
         return payload
 
     def _get_challenge(self) -> str:
-        """Uses the server provided challenge for up to ten seconds.
+        """Uses the server-provided challenge for up to ten seconds.
 
-        Returns
-        -------
-        str
-            Challenge
+        Returns:
+            str: The challenge string.
         """
         if time.time() - self._challenge_time > 10:
             self._build_box()
@@ -675,10 +707,8 @@ class Tag:
     def _create_database() -> sqlite3.Connection:
         """Creates an in-memory database for the tag with the current schema.
 
-        Returns
-        -------
-        sqlite3.Connection
-            The database.
+        Returns:
+            sqlite3.Connection: The database connection.
         """
         db = sqlite3.connect(":memory:")
         db.execute(
@@ -690,10 +720,8 @@ class Tag:
     def _add_tasks(self, tasks: list[str]):
         """Registers a list of tasks with the tag.
 
-        Parameters
-        ----------
-        tasks : list[str]
-            List of task IDs.
+        Args:
+            tasks (list[str]): List of task IDs.
         """
         with self._db:
             self._db.executemany(
@@ -703,12 +731,9 @@ class Tag:
     def to_file(self, filename: str, stay_linked: bool = False):
         """Exports the current state to a file.
 
-        Parameters
-        ----------
-        filename : str
-            Export destination.
-        stay_linked: bool
-            If True, will switch this tag to a file-based database.
+        Args:
+            filename (str): Export destination.
+            stay_linked (bool): If True, switches this tag to a file-based database.
         """
         destination = sqlite3.connect(filename)
         with destination:
@@ -726,15 +751,11 @@ class Tag:
 
         Does not pull results.
 
-        Parameters
-        ----------
-        tag : str
-            The tag name.
+        Args:
+            tag (str): The tag name.
 
-        Returns
-        -------
-        Tag
-            Populated object.
+        Returns:
+            Tag: The populated object.
         """
         t = Tag("")
         t.name = tag
@@ -747,21 +768,16 @@ class Tag:
     def from_file(filename: str) -> "Tag":
         """Loads a tag and all results for all tasks from a file.
 
-        Parameters
-        ----------
-        filename : str
-            Source file.
+        Args:
+            filename (str): Source file.
 
-        Returns
-        -------
-        Tag
-            The loaded tag.
+        Returns:
+            Tag: The loaded tag.
 
-        Raises
-        ------
-        ValueError
-            If the file does not exist.
+        Raises:
+            ValueError: If the file does not exist.
         """
+
         if not os.path.exists(filename):
             raise ValueError("File does not exist.")
 
@@ -814,10 +830,8 @@ class Tag:
     def _pull_batch(self, tasks: list[str]):
         """Pulls data for a batch of tasks.
 
-        Parameters
-        ----------
-        tasks : list[str]
-            Task IDs.
+        Args:
+            tasks (list[str]): Task IDs.
         """
         if len(tasks) > 0:
             results = api.retrieve_results(tasks)
@@ -842,10 +856,8 @@ class Tag:
     def _open_tasks(self) -> list[str]:
         """Finds all tasks without results or errors.
 
-        Returns
-        -------
-        list[str]
-            Task IDs.
+        Returns:
+            list[str]: Task IDs.
         """
         open_tasks = self._db.execute(
             "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
@@ -860,19 +872,13 @@ class Tag:
     ) -> int:
         """Downloads data from the queue for all tasks in the tag.
 
-        Parameters
-        ----------
-        blocking : bool, optional
-            Whether to retry downloading until all data has been fetched, by default False
-        batchsize : int, optional
-            Number of tasks to download at once, by default 100.
-        tasks_subset : list[str], optional
-            Subset of tasks to download, by default None.
+        Args:
+            blocking (bool, optional): Whether to retry downloading until all data has been fetched. Defaults to False.
+            batchsize (int, optional): Number of tasks to download at once. Defaults to 100.
+            tasks_subset (list[str], optional): Subset of tasks to download. Defaults to None.
 
-        Returns
-        -------
-        int
-            Number of remaining tasks for which neither result nor error is available.
+        Returns:
+            int: Number of remaining tasks for which neither result nor error is available.
         """
         open_tasks = self._open_tasks
         if tasks_subset is not None:
@@ -906,19 +912,21 @@ class Tag:
         return remaining
 
     def delete(self):
-        """Delete all remaining tasks from the queue, i.e. abort the remaining calculations."""
+        """Delete all remaining tasks from the queue.
+
+        This abort the remaining calculations."""
         api.delete_tasks(self._open_tasks)
 
     @property
     def results(self) -> typing.Generator[str, None, None]:
-        """Generator of all results.
+        """Generator yielding all results.
 
-        The ordering is stable as long as no tasks are added. This ordering is not the same as the order of submission.
+        The ordering remains stable as long as no tasks are added,
+        but it does not match the order of submission.
 
-        Returns
-        -------
-        typing.Generator[str, None, None]
-            Results, or None if the task has not been completed or an error occurred.
+        Returns:
+            Generator[str, None, None]: Yields results, or None if the task
+            has not been completed or an error occurred.
         """
         for (result,) in self._db.execute(
             "SELECT result FROM tasks ORDER BY task"
@@ -927,14 +935,14 @@ class Tag:
 
     @property
     def errors(self) -> typing.Generator[str, None, None]:
-        """Generator of all errors.
+        """Generator yielding all errors.
 
-        The ordering is stable as long as no tasks are added. This ordering is not the same as the order of submission.
+        The ordering remains stable as long as no tasks are added,
+        but it does not match the order of submission.
 
-        Returns
-        -------
-        typing.Generator[str, None, None]
-            Results, or None if the task has not been completed or an error occurred.
+        Returns:
+            Generator[str, None, None]: Yields errors, or None if the task
+            has not been completed or an error has not occurred.
         """
         for (error,) in self._db.execute(
             "SELECT error FROM tasks ORDER BY task"
