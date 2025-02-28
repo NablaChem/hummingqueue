@@ -11,6 +11,7 @@ import base64
 import socket
 import requests.adapters
 import urllib3
+import concurrent
 import cloudpickle
 import json
 import hashlib
@@ -213,13 +214,13 @@ class API:
             raise ValueError("Instance is not reachable.")
 
         # test for version match
-        server_version = self._get(f"/version", baseurl=case).json()["version"]
-        client_version = importlib.metadata.version("hmq")
-        if server_version != client_version:
-            warnings.warn(
-                f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq",
-                DeprecationWarning,
-            )
+        # server_version = self._get(f"/version", baseurl=case).json()["version"]
+        # client_version = importlib.metadata.version("hmq")
+        # if server_version != client_version:
+        #    warnings.warn(
+        #        f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq",
+        #        DeprecationWarning,
+        #    )
         return case
 
     def _build_box(self, offline=False):
@@ -845,12 +846,8 @@ class Tag:
                             "taskid": task,
                         }
                     )
-
-            with self._db:
-                self._db.executemany(
-                    "UPDATE tasks SET result = :result, error = :error WHERE task = :taskid",
-                    updates,
-                )
+            return updates
+        return []
 
     @property
     def _open_tasks(self) -> list[str]:
@@ -869,6 +866,7 @@ class Tag:
         blocking: bool = False,
         batchsize: int = 100,
         tasks_subset: list[str] = None,
+        workers: int = 4,
     ) -> int:
         """Downloads data from the queue for all tasks in the tag.
 
@@ -876,6 +874,7 @@ class Tag:
             blocking (bool, optional): Whether to retry downloading until all data has been fetched. Defaults to False.
             batchsize (int, optional): Number of tasks to download at once. Defaults to 100.
             tasks_subset (list[str], optional): Subset of tasks to download. Defaults to None.
+            workers (int, optional): Number of parallel workers. Defaults to 4.
 
         Returns:
             int: Number of remaining tasks for which neither result nor error is available.
@@ -889,19 +888,45 @@ class Tag:
             )
 
         total_tasks = self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
-        while len(open_tasks) > 0:
-            tasklist = []
-            for task in tqdm.tqdm(
-                open_tasks,
+        aborted = False
+        while len(open_tasks) > 0 and not aborted:
+            futures = []
+            with tqdm.tqdm(
+                total=total_tasks,
                 desc="Pulling",
                 unit="tasks",
                 initial=total_tasks - len(open_tasks),
-            ):
-                tasklist.append(task)
-                if len(tasklist) == batchsize:
-                    self._pull_batch(tasklist)
-                    tasklist = []
-            self._pull_batch(tasklist)
+            ) as pbar:
+                with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=workers
+                ) as executor:
+                    try:
+                        # send work
+                        tasklist = []
+                        for task in open_tasks:
+                            tasklist.append(task)
+                            if len(tasklist) == batchsize:
+                                futures.append(
+                                    executor.submit(self._pull_batch, tasklist[:])
+                                )
+                                tasklist = []
+                        futures.append(executor.submit(self._pull_batch, tasklist[:]))
+
+                        # retrieve results
+                        for future in concurrent.futures.as_completed(futures):
+                            insertable = future.result()
+                            if len(insertable) > 0:
+                                with self._db:
+                                    self._db.executemany(
+                                        "UPDATE tasks SET result = :result, error = :error WHERE task = :taskid",
+                                        insertable,
+                                    )
+                            pbar.update(len(insertable))
+                    except KeyboardInterrupt:
+                        print("Aborting gracefully.")
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        aborted = True
+            # repeat if blocking
             if not blocking:
                 break
             open_tasks = self._open_tasks
