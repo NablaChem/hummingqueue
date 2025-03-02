@@ -500,18 +500,42 @@ class API:
         }
         return self._post("/tag/inspect", payload)
 
-    def delete_tasks(self, tasks: list[str]):
-        deleted = []
-        while len(tasks) > 0:
-            chunk = tasks[:500]
-            tasks = tasks[500:]
+    def delete_tasks(self, tasks: list[str] = None, tag: str = None):
+        """Deletes tasks from the queue.
 
+        Identification of tasks may be done either by complete list of task ids or tag names.
+
+        Args:
+            tasks (list[str], optional): List of task ids. Defaults to None.
+            tag (str, optional): Tag ids. Defaults to None.
+
+        Returns:
+            _type_: List of task ids deleted.
+        """
+        if tasks is None and tag is None:
+            raise ValueError("Either tasks or tag must be provided.")
+        if tasks is not None and tag is not None:
+            raise ValueError("Either tasks or tag must be provided, not both.")
+        if tag is not None:
             payload = {
-                "delete": chunk,
+                "tag": tag,
                 "challenge": self._get_challenge(),
             }
-            deleted += self._post("/tasks/delete", payload)
-        return deleted
+            return self._post("/tasks/delete", payload)
+        if tasks is not None:
+            chunksize = 100
+            deleted = []
+            with tqdm.tqdm(total=len(tasks), desc="Deleting tasks") as pbar:
+                while len(tasks) > 0:
+                    chunk = tasks[:chunksize]
+                    tasks = tasks[chunksize:]
+                    payload = {
+                        "delete": chunk,
+                        "challenge": self._get_challenge(),
+                    }
+                    deleted += self._post("/tasks/delete", payload)
+                    pbar.update(len(chunk))
+            return deleted
 
     def fetch_function(self, function: str):
         return self._get(f"/function/fetch/{function}").content
@@ -953,10 +977,23 @@ class Tag:
             Generator[str, None, None]: Yields results, or None if the task
             has not been completed or an error occurred.
         """
-        for (result,) in self._db.execute(
-            "SELECT result FROM tasks ORDER BY task"
-        ).fetchall():
-            yield Tag._from_blob(result)
+        yield from self._yield_column("result")
+
+    def _yield_column(self, column: str) -> typing.Generator[str, None, None]:
+        """Generator yielding all values of a column.
+
+        Args:
+            column (str): Column name.
+
+        Returns:
+            Generator[str, None, None]: Yields values.
+        """
+        cursor = self._db.execute(f"SELECT {column} FROM tasks ORDER BY task")
+        try:
+            for value in cursor.fetchall():
+                yield Tag._from_blob(value[0])
+        finally:
+            cursor.close()
 
     @property
     def errors(self) -> typing.Generator[str, None, None]:
@@ -969,10 +1006,7 @@ class Tag:
             Generator[str, None, None]: Yields errors, or None if the task
             has not been completed or an error has not occurred.
         """
-        for (error,) in self._db.execute(
-            "SELECT error FROM tasks ORDER BY task"
-        ).fetchall():
-            yield Tag._from_blob(error)
+        yield from self._yield_column("error")
 
 
 def request_access(url: str):
