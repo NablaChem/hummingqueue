@@ -180,34 +180,70 @@ def tasks_submit(body: TaskSubmit):
 
 class TasksDelete(BaseModel):
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
-    delete: List[str] = Field(..., description="List of task ids to cancel and delete.")
+    tasks: List[str] = Field(None, description="List of task ids to cancel and delete.")
+    tag: str = Field(None, description="Tag of which to cancel and delete all tasks.")
 
 
-@app.post("/tasks/delete", tags=["compute"])
+class TasksCancel(BaseModel):
+    challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
+    tasks: List[str] = Field(None, description="List of task ids to cancel.")
+    tag: str = Field(None, description="Tag of which to cancel all tasks.")
+
+
+class TasksDeleteCancelResponse(BaseModel):
+    count: int = Field(..., description="Number of tasks affected.")
+
+
+@app.post("/tasks/cancel", tags=["compute"], response_model=TasksDeleteCancelResponse)
+def tasks_delete(body: TasksCancel):
+    verify_challenge(body.challenge)
+
+    return {"count": cancel_and_delete(body, delete=False)}
+
+
+@app.post("/tasks/delete", tags=["compute"], response_model=TasksDeleteCancelResponse)
 def tasks_delete(body: TasksDelete):
     verify_challenge(body.challenge)
 
-    # mongodb
-    logentries = []
-    to_be_deleted = {
-        "id": {"$in": body.delete},
-        "status": {"$in": ["pending", "queued"]},
-    }
+    return {"count": cancel_and_delete(body, delete=True)}
 
-    existing = auth.db.tasks.find(to_be_deleted)
-    now = time.time()
-    existing_ids = []
-    for task in existing:
-        logentries.append({"event": "task/delete", "id": task["id"], "ts": now})
-        existing_ids.append(task["id"])
-    auth.db.tasks.update_many(to_be_deleted, {"$set": {"status": "deleted"}})
-    auth.db.tasks.update_many(
-        to_be_deleted, {"$unset": {"error": "", "result": "", "call": ""}}
-    )
-    if len(logentries) > 0:
-        auth.db.logs.insert_many(logentries)
 
-    return existing_ids
+def cancel_and_delete(body, delete):
+    if body.tag:
+        if delete:
+            criterion = {"tag": body.tag}
+        else:
+            criterion = {"tag": body.tag, "status": {"$in": ["pending", "queued"]}}
+    elif body.tasks:
+        if delete:
+            criterion = {
+                "id": {"$in": body.tasks},
+            }
+        else:
+            criterion = {
+                "id": {"$in": body.delete},
+                "status": {"$in": ["pending", "queued"]},
+            }
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either tag or tasks must be provided.",
+        )
+
+    num_affected = auth.db.tasks.count_documents(criterion)
+    if delete:
+        auth.db.tasks.delete_many(criterion)
+    else:
+        existing = auth.db.tasks.find(criterion)
+        existing_ids = []
+        for task in existing:
+            existing_ids.append(task["id"])
+        auth.db.tasks.update_many(criterion, {"$set": {"status": "deleted"}})
+        auth.db.tasks.update_many(
+            criterion, {"$unset": {"error": "", "result": "", "call": ""}}
+        )
+
+    return num_affected
 
 
 class TasksInspect(BaseModel):
