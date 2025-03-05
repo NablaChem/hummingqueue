@@ -954,6 +954,8 @@ class Tag:
             if not blocking:
                 break
             open_tasks = self._open_tasks
+            if tasks_subset is not None:
+                open_tasks = [t for t in open_tasks if t in tasks_subset]
             time.sleep(5)
         remaining = self._db.execute(
             "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
@@ -990,7 +992,7 @@ class Tag:
         """
         cursor = self._db.execute(f"SELECT {column} FROM tasks ORDER BY task")
         try:
-            for value in cursor.fetchall():
+            for value in cursor:
                 yield Tag._from_blob(value[0])
         finally:
             cursor.close()
