@@ -859,7 +859,10 @@ class Tag:
             tasks (list[str]): Task IDs.
         """
         if len(tasks) > 0:
-            results = api.retrieve_results(tasks)
+            try:
+                results = api.retrieve_results(tasks)
+            except:
+                return []
             updates = []
             for task, result in results.items():
                 if result is not None:
@@ -873,17 +876,82 @@ class Tag:
             return updates
         return []
 
-    # @property
-    # def _open_tasks(self) -> list[str]:
-    #    """Finds all tasks without results or errors.##
+    @property
+    def _open_tasks(self) -> list[str]:
+        """Finds all tasks without results or errors.
 
-    #    Returns:
-    #         list[str]: Task IDs.
-    #    """
-    #    open_tasks = self._db.execute(
-    #        "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
-    #    ).fetchall()
-    #    return [_[0] for _ in open_tasks]
+        Returns:
+             list[str]: Task IDs.
+        """
+        open_tasks = self._db.execute(
+            "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
+        ).fetchall()
+        return [_[0] for _ in open_tasks]
+
+    @property
+    def _open_task_count(self) -> int:
+        """Number of all tasks without results or errors.
+
+        Returns:
+            int: Task count.
+        """
+        return self._db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
+        ).fetchone()[0]
+
+    def _pull_section(
+        self,
+        section: list[str],
+        workers: int,
+        tasks_subset: list[str],
+        batchsize: int,
+        pbar: tqdm.tqdm,
+    ) -> bool:
+        """Subdivision of the task list for parallel processing.
+
+        If a task filter is provided, only tasks in the filter are processed.
+
+        Args:
+            section (list[str]): Set of tasks to process.
+            workers (int): Number of concurrent workers.
+            tasks_subset (list[str]): Optional filter for tasks.
+            batchsize (int): Number of tasks per worker call.
+            pbar (tqdm.tqdm): Progress bar to update.
+
+        Returns:
+            bool: Whether the operation was aborted via Ctrl+C.
+        """
+        futures = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            try:
+                # send work
+                njobs = 0
+                tasklist = []
+                for task in section:
+                    task = task[0]
+                    if tasks_subset is None or task in tasks_subset:
+                        tasklist.append(task)
+                    if len(tasklist) == batchsize:
+                        futures.append(executor.submit(self._pull_batch, tasklist[:]))
+                        njobs += 1
+                        tasklist = []
+                futures.append(executor.submit(self._pull_batch, tasklist[:]))
+
+                # retrieve results
+                for future in concurrent.futures.as_completed(futures):
+                    insertable = future.result()
+                    if len(insertable) > 0:
+                        with self._db:
+                            self._db.executemany(
+                                "UPDATE tasks SET result = :result, error = :error WHERE task = :taskid",
+                                insertable,
+                            )
+                    pbar.update(len(insertable))
+            except KeyboardInterrupt:
+                print("Aborting gracefully.")
+                executor.shutdown(wait=False, cancel_futures=True)
+                return True
+        return False
 
     def pull(
         self,
@@ -910,69 +978,36 @@ class Tag:
                 "Warning: large number of tasks held in memory. Consider switching to a file-based database via .to_file()."
             )
 
-        open_tasks = self._db.execute(
-            "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
-        ).fetchone()[0]
+        if self._open_task_count == 0:
+            return
 
         aborted = False
-        while open_tasks > 0 and not aborted:
-            futures = []
-            with tqdm.tqdm(
-                total=total_tasks,
-                desc="Pulling",
-                unit="tasks",
-                initial=total_tasks - open_tasks,
-            ) as pbar:
-                with concurrent.futures.ThreadPoolExecutor(
-                    max_workers=workers
-                ) as executor:
-                    try:
-                        # send work
-                        njobs = 0
-                        tasklist = []
-                        for task in self._db.execute(
-                            "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
-                        ):
-                            task = task[0]
-                            if tasks_subset is None or task in tasks_subset:
-                                tasklist.append(task)
-                            if len(tasklist) == batchsize:
-                                futures.append(
-                                    executor.submit(self._pull_batch, tasklist[:])
-                                )
-                                njobs += 1
-                                tasklist = []
-                            if njobs > 40:
-                                break
-                        futures.append(executor.submit(self._pull_batch, tasklist[:]))
-
-                        # retrieve results
-                        for future in concurrent.futures.as_completed(futures):
-                            insertable = future.result()
-                            if len(insertable) > 0:
-                                with self._db:
-                                    self._db.executemany(
-                                        "UPDATE tasks SET result = :result, error = :error WHERE task = :taskid",
-                                        insertable,
-                                    )
-                            pbar.update(len(insertable))
-                    except KeyboardInterrupt:
-                        print("Aborting gracefully.")
-                        executor.shutdown(wait=False, cancel_futures=True)
-                        aborted = True
-            # repeat if blocking
-            if not blocking:
-                break
-            open_tasks = self._db.execute(
-                "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
-            ).fetchone()[0]
-            if tasks_subset is not None:
-                open_tasks = [t for t in open_tasks if t in tasks_subset]
-            time.sleep(5)
-        remaining = self._db.execute(
-            "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
-        ).fetchone()[0]
-        return remaining
+        n_tasks_per_section = 200
+        split_size = n_tasks_per_section * batchsize
+        with tqdm.tqdm(
+            total=total_tasks,
+            desc="Pulling",
+            unit="tasks",
+            initial=total_tasks - self._open_task_count,
+        ) as pbar:
+            while self._open_task_count > 0 and not aborted:
+                open_tasks = self._db.execute(
+                    "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
+                ).fetchall()
+                while len(open_tasks) > 0:
+                    section, open_tasks = (
+                        open_tasks[:split_size],
+                        open_tasks[split_size:],
+                    )
+                    aborted = self._pull_section(
+                        section, workers, tasks_subset, batchsize, pbar
+                    )
+                    if aborted:
+                        break
+                if not blocking:
+                    break
+                time.sleep(5)
+        return self._open_task_count
 
     def delete(self):
         """Delete all remaining tasks from the queue.
