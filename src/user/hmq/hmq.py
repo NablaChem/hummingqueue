@@ -873,17 +873,17 @@ class Tag:
             return updates
         return []
 
-    @property
-    def _open_tasks(self) -> list[str]:
-        """Finds all tasks without results or errors.
+    # @property
+    # def _open_tasks(self) -> list[str]:
+    #    """Finds all tasks without results or errors.##
 
-        Returns:
-            list[str]: Task IDs.
-        """
-        open_tasks = self._db.execute(
-            "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
-        ).fetchall()
-        return [_[0] for _ in open_tasks]
+    #    Returns:
+    #         list[str]: Task IDs.
+    #    """
+    #    open_tasks = self._db.execute(
+    #        "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
+    #    ).fetchall()
+    #    return [_[0] for _ in open_tasks]
 
     def pull(
         self,
@@ -903,37 +903,47 @@ class Tag:
         Returns:
             int: Number of remaining tasks for which neither result nor error is available.
         """
-        open_tasks = self._open_tasks
-        if tasks_subset is not None:
-            open_tasks = [t for t in open_tasks if t in tasks_subset]
-        if len(open_tasks) > 10000 and self._in_memory:
+        total_tasks = self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+
+        if total_tasks > 10000 and self._in_memory:
             print(
                 "Warning: large number of tasks held in memory. Consider switching to a file-based database via .to_file()."
             )
 
-        total_tasks = self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        open_tasks = self._db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
+        ).fetchone()[0]
+
         aborted = False
-        while len(open_tasks) > 0 and not aborted:
+        while open_tasks > 0 and not aborted:
             futures = []
             with tqdm.tqdm(
                 total=total_tasks,
                 desc="Pulling",
                 unit="tasks",
-                initial=total_tasks - len(open_tasks),
+                initial=total_tasks - open_tasks,
             ) as pbar:
                 with concurrent.futures.ThreadPoolExecutor(
                     max_workers=workers
                 ) as executor:
                     try:
                         # send work
+                        njobs = 0
                         tasklist = []
-                        for task in open_tasks:
-                            tasklist.append(task)
+                        for task in self._db.execute(
+                            "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
+                        ):
+                            task = task[0]
+                            if tasks_subset is None or task in tasks_subset:
+                                tasklist.append(task)
                             if len(tasklist) == batchsize:
                                 futures.append(
                                     executor.submit(self._pull_batch, tasklist[:])
                                 )
+                                njobs += 1
                                 tasklist = []
+                            if njobs > 40:
+                                break
                         futures.append(executor.submit(self._pull_batch, tasklist[:]))
 
                         # retrieve results
@@ -953,7 +963,9 @@ class Tag:
             # repeat if blocking
             if not blocking:
                 break
-            open_tasks = self._open_tasks
+            open_tasks = self._db.execute(
+                "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
+            ).fetchone()[0]
             if tasks_subset is not None:
                 open_tasks = [t for t in open_tasks if t in tasks_subset]
             time.sleep(5)
