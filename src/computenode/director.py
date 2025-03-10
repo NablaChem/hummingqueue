@@ -164,6 +164,28 @@ class SlurmManager:
 
         return self._idle_compute_units
 
+    def _get_idle_nodes(self):
+        cmd = 'sinfo --noheader -o "%P %D %T"'
+        try:
+            lines = subprocess.check_output(shlex.split(cmd)).splitlines()
+        except subprocess.CalledProcessError:
+            return 0
+        idles = {}
+        for line in lines:
+            pname, nodecount, state = line.decode("ascii").split()
+            if state == "idle":
+                idles[pname] = int(nodecount)
+        return idles
+
+    @property
+    def best_partition(self):
+        partitions = self._config["datacenter"]["partitions"].split(",")
+        idles = self._get_idle_nodes()
+        for partition in partitions:
+            if idles.get(partition, 0) > 0:
+                return partition
+        return random.choice(partitions)
+
 
 class RedisManager:
     def __init__(self, config):
@@ -470,9 +492,7 @@ def main():
                         "redis_host": config["datacenter"]["redis_host"],
                         "redis_pass": config["datacenter"]["redis_pass"],
                         "binaries": config["datacenter"]["binaries"],
-                        "partitions": random.choice(
-                            config["datacenter"]["partitions"].split(",")
-                        ),
+                        "partitions": slurm.best_partition,
                     }
                     try:
                         if config["containers"]["method"] == "udocker":
