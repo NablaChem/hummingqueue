@@ -25,6 +25,7 @@ import zlib
 import subprocess
 import secrets
 import shutil
+import packaging.version
 from pathlib import Path
 import nacl
 from nacl.secret import SecretBox
@@ -215,13 +216,20 @@ class API:
             raise ValueError("Instance is not reachable.")
 
         # test for version match
-        # server_version = self._get(f"/version", baseurl=case).json()["version"]
-        # client_version = importlib.metadata.version("hmq")
-        # if server_version != client_version:
-        #    warnings.warn(
-        #        f"Version mismatch. Server is {server_version}, client is {client_version}. Please update: pip install --upgrade hmq",
-        #        DeprecationWarning,
-        #    )
+        server_version = packaging.version(
+            self._get(f"/version", baseurl=case).json()["version"]
+        )
+        client_version = packaging.version(importlib.metadata.version("hmq"))
+        if server_version > client_version:
+            print(
+                f"hmq package is too old for this server. Server is on {server_version}, client is {client_version}. Please update by running 'hmq update'."
+            )
+            sys.exit(1)
+        if server_version < client_version:
+            print(
+                f"Server is too old for this hmq package. Server is on {server_version}, client is {client_version}. Please downgrade hmq or update the server."
+            )
+            sys.exit(1)
         return case
 
     def _build_box(self, offline=False):

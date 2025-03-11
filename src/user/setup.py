@@ -5,7 +5,7 @@ setup(
     version="25.6",
     description="Distributed computing.",
     url="https://github.com/NablaChem/hummingqueue",
-    author="Guido Falk von Rudorff",
+    author="Guido von Rudorff",
     author_email="guido@vonrudorff.de",
     license="AGPL-3.0",
     packages=["hmq"],
@@ -20,6 +20,7 @@ setup(
         "toml",
         "numpy",
         "pandas",
+        "packaging",
     ],
     entry_points={
         "console_scripts": ["hmq=hmq:cli"],
