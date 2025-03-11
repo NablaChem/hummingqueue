@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name="hmq",
-    version="VERSION",
+    version="25.6",
     description="Distributed computing.",
     url="https://github.com/NablaChem/hummingqueue",
     author="Guido Falk von Rudorff",

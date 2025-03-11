@@ -12,4 +12,4 @@ worker:
 director:
 	cd computenode; PYTHONPATH="../user:${PYTHONPATH}" python director.py cluster-configs/localhost
 pypi:
-	cd user; bash -c 'sed -i "s/VERSION/$$(cat ../VERSION)/" setup.py'; rm dist/*; python setup.py sdist; twine upload dist/*; git checkout setup.py
+	cd user; rm dist/*; python setup.py sdist; twine upload dist/*; git checkout setup.py

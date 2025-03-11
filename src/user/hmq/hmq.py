@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 import sqlite3
 import zlib
+import subprocess
 import secrets
 import shutil
 from pathlib import Path
@@ -1169,12 +1170,35 @@ class CachedWorker(Worker):
         return super().execute_job(job, queue)
 
 
+def update_library() -> int:
+    """Update the hummingqueue library.
+
+    Returns:
+        int: Status code of pip.
+    """
+    # direct_url.json only present if installed from git
+    from_git = "direct_url.json" in (_.name for _ in importlib.metadata.files("hmq"))
+
+    if from_git:
+        command = "pip install --upgrade git+https://github.com/NablaChem/hummingqueue.git@main#subdirectory=src/user"
+    else:
+        command = "pip install --upgrade hmq"
+
+    result = subprocess.run(command, shell=True)
+    if result.returncode != 0:
+        print(f"Could not update using {command}.")
+        return 1
+    print("Updated.")
+    return 0
+
+
 def cli():
     if len(sys.argv) == 1:
         print(
             """Usage: hmq COMMAND [ARGS]
         
 Commands:
+update                                  Update the hummingqueue library.
 request_access URL                      Request access to a hummingqueue instance.
 grant_access SIGNING_REQUEST USERNAME   Grant access to a user."""
         )
@@ -1186,6 +1210,9 @@ grant_access SIGNING_REQUEST USERNAME   Grant access to a user."""
             sys.exit(1)
         print(request_access(sys.argv[2]))
         sys.exit(0)
+
+    if sys.argv[1] == "update":
+        sys.exit(update_library())
 
     if sys.argv[1] == "grant_access":
         if len(sys.argv) != 4:
