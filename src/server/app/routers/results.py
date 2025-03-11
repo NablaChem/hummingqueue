@@ -28,7 +28,13 @@ def results_store(body: ResultsStore):
     auth.verify_challenge(body.challenge)
 
     now = time.time()
+    njobs = len(body.results)
+    coretime = 0
     for result in body.results:
+        walltime = result.duration
+        ncores = auth.db.tasks.find_one({"id": result.task})["ncores"]
+        coretime += walltime * ncores
+
         is_error = False
         if result.error is not None:
             is_error = True
@@ -46,6 +52,9 @@ def results_store(body: ResultsStore):
             "done": now,
         }
         auth.db.tasks.update_one({"id": result.task}, {"$set": update})
+
+    auth.db.counters.update_one({"metric": "coretime"}, {"$inc": {"value": coretime}})
+    auth.db.counters.update_one({"metric": "njobs"}, {"$inc": {"value": njobs}})
 
 
 class ResultsRetrieve(BaseModel):

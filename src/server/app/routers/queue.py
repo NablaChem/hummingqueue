@@ -42,4 +42,11 @@ def inspect_usage():
         refts = stats["ts"]
         stats = {k: v for k, v in stats.items() if k != "_id" and k != "ts"}
         ret[unixminute_now - refts] = stats
+    if 0 not in ret:
+        ret[0] = {}
+
+    ret[0]["total_coretime"] = auth.db.counters.find_one({"metric": "coretime"})[
+        "value"
+    ]
+    ret[0]["total_jobs"] = auth.db.counters.find_one({"metric": "njobs"})["value"]
     return ret
