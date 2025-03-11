@@ -58,7 +58,16 @@ Hummingqueue is an open-source, self-hosted, distributed, and scalable job queue
 app.add_middleware(CompressMiddleware)
 
 # add routes
-routes = ["compute", "communication", "security"]
+routes = [
+    "compute",
+    "communication",
+    "security",
+    "function",
+    "queue",
+    "results",
+    "tags",
+    "tasks",
+]
 for route in routes:
     module = __import__(f"app.routers.{route}", fromlist=["app"])
 
