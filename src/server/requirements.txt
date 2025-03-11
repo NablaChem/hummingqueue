@@ -8,6 +8,5 @@ requests
 pytest-cov
 shortuuid
 starlette-compress
-sentry-sdk
+sentry-sdk[fastapi]
 gunicorn
-

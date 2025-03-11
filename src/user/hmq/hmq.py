@@ -1174,7 +1174,7 @@ class CachedWorker(Worker):
             api.warm_cache(job.kwargs["function"], json.loads(payload.decode("ascii")))
 
         # re-seed numpy random state
-        np.random.seed(int.from_bytes(secrets.token_bytes(4)))
+        np.random.seed(int.from_bytes(secrets.token_bytes(4), byteorder="big"))
         return super().execute_job(job, queue)
 
 
