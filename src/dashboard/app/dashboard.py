@@ -7,6 +7,7 @@ import datetime as dt
 import time
 from streamlit_autorefresh import st_autorefresh
 
+URL = "http://hmq"
 
 primary = "#1F3664"
 secondary = "#dd9633"
@@ -67,7 +68,8 @@ def T2(x):
     return f"{seconds}s"
 
 
-result = requests.get("http://hmq/queue/inspect")
+result = requests.get(f"{URL}/queue/inspect")
+print(result.json())
 
 rows = []
 for minutes_ago, data in result.json().items():
@@ -89,7 +91,7 @@ used = (
     .encode(x="age", y="cores_used")
     .properties(height=200)
 )
-domain = max(10, df.cores_allocated.max())
+domain = max(max(10, df.cores_allocated.max()), df.cores_used.max())
 allocated = (
     alt.Chart(df)
     .mark_area(opacity=0.6, color=primary)
@@ -169,7 +171,7 @@ with queue:
             border=False,
         )
 # tags
-result = requests.get("http://hmq/tags/inspect")
+result = requests.get(f"{URL}/tags/inspect")
 df = pd.DataFrame(result.json())
 if len(df) == 0:
     df = None
@@ -183,7 +185,7 @@ else:
     df.updated = time.time() - df.updated
     df["total"] = df.completed + df.failed + df.deleted + df.pending + df.queued
     df["progress"] = ((df.completed + df.failed + df.deleted) / df.total) * 100
-    df.progress.fillna(100, inplace=True)
+    df.fillna({"progress": 0}, inplace=True)
     df.received = df.received.apply(T)
     df.updated = df.updated.apply(T)
     df.computetime = df.computetime.apply(T2)
@@ -206,7 +208,7 @@ else:
 
 
 # datacenters
-result = requests.get("http://hmq/datacenters/inspect")
+result = requests.get(f"{URL}/datacenters/inspect")
 rows = []
 for datacenter, last_seen in result.json().items():
     explained = human_readable.time_delta(dt.timedelta(seconds=last_seen))
