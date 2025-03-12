@@ -783,13 +783,19 @@ class Tag:
                 "INSERT INTO tasks (task) VALUES (?)", [(task,) for task in tasks]
             )
 
-    def to_file(self, filename: str, stay_linked: bool = False):
+    def to_file(
+        self, filename: str, stay_linked: bool = False, overwrite: bool = False
+    ):
         """Exports the current state to a file.
 
         Args:
             filename (str): Export destination.
             stay_linked (bool): If True, switches this tag to a file-based database.
         """
+        # check if file exists
+        if os.path.exists(filename) and not overwrite:
+            raise ValueError("File already exists. Use overwrite=True to overwrite.")
+
         destination = sqlite3.connect(filename)
         with destination:
             self._db.backup(destination)
