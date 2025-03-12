@@ -509,6 +509,21 @@ class API:
         }
         return self._post("/tag/inspect", payload)
 
+    def cancel_tasks(self, tasks: list[str] = None, tag: str = None):
+        """Canceles tasks in the queue.
+
+        Identification of tasks may be done either by complete list of task ids or tag names.
+
+        Args:
+            tasks (list[str], optional): List of task ids. Defaults to None.
+            tag (str, optional): Tag ids. Defaults to None.
+
+        Returns:
+            _type_: List of task ids canceled.
+        """
+        endpoint = "cancel"
+        return self._cancel_or_delete_tasks(tasks, tag, endpoint)
+
     def delete_tasks(self, tasks: list[str] = None, tag: str = None):
         """Deletes tasks from the queue.
 
@@ -521,6 +536,10 @@ class API:
         Returns:
             _type_: List of task ids deleted.
         """
+        endpoint = "delete"
+        return self._cancel_or_delete_tasks(tasks, tag, endpoint)
+
+    def _cancel_or_delete_tasks(self, tasks: list[str], tag: str, endpoint: str):
         if tasks is None and tag is None:
             raise ValueError("Either tasks or tag must be provided.")
         if tasks is not None and tag is not None:
@@ -530,19 +549,19 @@ class API:
                 "tag": tag,
                 "challenge": self._get_challenge(),
             }
-            return self._post("/tasks/delete", payload)
+            return self._post(f"/tasks/{endpoint}", payload)
         if tasks is not None:
             chunksize = 100
             deleted = []
-            with tqdm.tqdm(total=len(tasks), desc="Deleting tasks") as pbar:
+            with tqdm.tqdm(total=len(tasks), desc="Tasks") as pbar:
                 while len(tasks) > 0:
                     chunk = tasks[:chunksize]
                     tasks = tasks[chunksize:]
                     payload = {
-                        "delete": chunk,
+                        "tasks": chunk,
                         "challenge": self._get_challenge(),
                     }
-                    deleted += self._post("/tasks/delete", payload)
+                    deleted += self._post(f"/tasks/{endpoint}", payload)
                     pbar.update(len(chunk))
             return deleted
 
@@ -754,6 +773,8 @@ class Tag:
     def _add_tasks(self, tasks: list[str]):
         """Registers a list of tasks with the tag.
 
+        Already existing tasks are silently ignored.
+
         Args:
             tasks (list[str]): List of task IDs.
         """
@@ -794,9 +815,20 @@ class Tag:
         t = Tag("")
         t.name = tag
         total = api.get_tag_status(tag)["total"]
-        print(f"Found {total} tasks.")
-        t._add_tasks(api.find_tasks(tag))
+        print(f"Queue knows {total} tasks. Download them with .fetch_tasks().")
         return t
+
+    def fetch_tasks(self) -> int:
+        """Adds all remaining tasks in the queue for this tag.
+
+        Existing tasks in this tag remain available.
+
+        Returns:
+            int: Number of tasks added.
+        """
+        initial_task_count = len(self)
+        self._add_tasks(api.find_tasks(self.name))
+        return len(self) - initial_task_count
 
     @staticmethod
     def from_file(filename: str) -> "Tag":
@@ -980,7 +1012,7 @@ class Tag:
         Returns:
             int: Number of remaining tasks for which neither result nor error is available.
         """
-        total_tasks = self._db.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        total_tasks = len(self) or self.fetch_tasks()
 
         if total_tasks > 10000 and self._in_memory:
             print(
@@ -1018,11 +1050,19 @@ class Tag:
                 time.sleep(5)
         return self._open_task_count
 
-    def delete(self):
-        """Delete all remaining tasks from the queue.
+    def delete(self, downloaded_only=False):
+        """Delete data from the queue."""
+        if downloaded_only:
+            downloaded_tasks = self._db.execute(
+                "SELECT task FROM tasks WHERE result IS NOT NULL OR error IS NOT NULL"
+            ).fetchall()
+            api.delete_tasks(tasks=[_[0] for _ in downloaded_tasks])
+        else:
+            api.delete_tasks(tag=self.name)
 
-        This abort the remaining calculations."""
-        api.delete_tasks(self._open_tasks)
+    def cancel(self):
+        """Cancels all remaining tasks in the queue."""
+        api.cancel_tag(self.name)
 
     @property
     def results(self) -> typing.Generator[str, None, None]:

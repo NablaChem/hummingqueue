@@ -113,7 +113,7 @@ def cancel_and_delete(body, delete):
             }
         else:
             criterion = {
-                "id": {"$in": body.delete},
+                "id": {"$in": body.tasks},
                 "status": {"$in": ["pending", "queued"]},
             }
     else:
@@ -126,10 +126,6 @@ def cancel_and_delete(body, delete):
     if delete:
         auth.db.tasks.delete_many(criterion)
     else:
-        existing = auth.db.tasks.find(criterion)
-        existing_ids = []
-        for task in existing:
-            existing_ids.append(task["id"])
         auth.db.tasks.update_many(criterion, {"$set": {"status": "deleted"}})
         auth.db.tasks.update_many(
             criterion, {"$unset": {"error": "", "result": "", "call": ""}}
