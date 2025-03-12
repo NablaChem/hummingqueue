@@ -5,6 +5,7 @@ import sys
 import traceback
 import os
 import time
+import click
 import importlib.metadata
 import requests
 import base64
@@ -216,10 +217,10 @@ class API:
             raise ValueError("Instance is not reachable.")
 
         # test for version match
-        server_version = packaging.version(
+        server_version = packaging.version.Version(
             self._get(f"/version", baseurl=case).json()["version"]
         )
-        client_version = packaging.version(importlib.metadata.version("hmq"))
+        client_version = packaging.version.Version(importlib.metadata.version("hmq"))
         if server_version > client_version:
             print(
                 f"hmq package is too old for this server. Server is on {server_version}, client is {client_version}. Please update by running 'hmq update'."
@@ -1026,7 +1027,7 @@ class Tag:
             )
 
         if self._open_task_count == 0:
-            return
+            return 0
 
         aborted = False
         n_tasks_per_section = 200
@@ -1246,35 +1247,60 @@ def update_library() -> int:
     return 0
 
 
+@click.group()
 def cli():
-    if len(sys.argv) == 1:
-        print(
-            """Usage: hmq COMMAND [ARGS]
-        
-Commands:
-update                                  Update the hummingqueue library.
-request_access URL                      Request access to a hummingqueue instance.
-grant_access SIGNING_REQUEST USERNAME   Grant access to a user."""
-        )
-        sys.exit(1)
+    """Hummingqueue Command Line Interface."""
+    pass
 
-    if sys.argv[1] == "request_access":
-        if len(sys.argv) != 3:
-            print("Usage: hmq request_access URL")
-            sys.exit(1)
-        print(request_access(sys.argv[2]))
-        sys.exit(0)
 
-    if sys.argv[1] == "update":
-        sys.exit(update_library())
+@cli.command(name="update")
+def _update():
+    """Update the hummingqueue library."""
+    print(update_library())
 
-    if sys.argv[1] == "grant_access":
-        if len(sys.argv) != 4:
-            print("Usage: hmq grant_access SIGNING_REQUEST USERNAME")
-            sys.exit(1)
-        admin_key = input("Admin key: ")
-        grant_access(sys.argv[2], admin_key, sys.argv[3])
-        sys.exit(0)
 
-    print("Unknown command.")
-    sys.exit(1)
+@cli.command(name="request-access")
+@click.argument("url")
+def _request_access(url):
+    """Request access to a hummingqueue instance."""
+    print(request_access(url))
+
+
+@cli.command(name="grant-access")
+@click.argument("signing_request")
+@click.argument("username")
+def _grant_access(signing_request, username):
+    """Grant access to a user."""
+    admin_key = click.prompt("Admin key", hide_input=True)
+    grant_access(signing_request, admin_key, username)
+
+
+@cli.command(name="delete")
+@click.argument("tag")
+def _delete(tag):
+    """Deletes all remote data of a tag."""
+    api.delete_tasks(tag=tag)
+
+
+@cli.command(name="pull")
+@click.option("--tag", help="The tag to pull from.", required=False)
+@click.argument("file", type=click.Path(resolve_path=True))
+def _pull(tag, file):
+    """
+    Pull a tag into a file or update a tag file.
+    """
+    if not os.path.exists(file) and tag:
+        tag = Tag.from_queue(tag)
+        tag.fetch_tasks()
+        tag.to_file(file, stay_linked=True)
+    elif os.path.exists(file) and not tag:
+        tag = Tag.from_file(file)
+    else:
+        raise click.BadParameter("Invalid combination of arguments.")
+
+    remaining = tag.pull()
+    print(f"Remaining tasks: {remaining}")
+
+
+if __name__ == "__main__":
+    cli()

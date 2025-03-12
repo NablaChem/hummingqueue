@@ -9,3 +9,4 @@ rq
 sentry_sdk
 numpy
 pandas
+click
