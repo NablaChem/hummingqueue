@@ -1072,6 +1072,20 @@ class Tag:
         api.cancel_tag(self.name)
 
     @property
+    def n_results(self) -> int:
+        """Count the number of results."""
+        return self._db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE result IS NOT NULL"
+        ).fetchone()[0]
+
+    @property
+    def n_errors(self) -> int:
+        """Count the number of errors."""
+        return self._db.execute(
+            "SELECT COUNT(*) FROM tasks WHERE error IS NOT NULL"
+        ).fetchone()[0]
+
+    @property
     def results(self) -> typing.Generator[str, None, None]:
         """Generator yielding all results.
 
@@ -1300,6 +1314,27 @@ def _pull(tag, file):
 
     remaining = tag.pull()
     print(f"Remaining tasks: {remaining}")
+
+
+@cli.command(name="describe")
+@click.argument("file", type=click.Path(resolve_path=True, readable=True, exists=True))
+def _describe(tag, file):
+    """
+    Shows a summary of a tag file.
+    """
+    tag = Tag.from_file(file)
+    tag.name, len(tag), tag.n_results, tag.n_errors
+
+    # show first few results
+    for i, result in enumerate(tag.results):
+        if i > 5:
+            break
+        print(result)
+
+    for i, result in enumerate(tag.errors):
+        if i > 5:
+            break
+        print(result)
 
 
 if __name__ == "__main__":
