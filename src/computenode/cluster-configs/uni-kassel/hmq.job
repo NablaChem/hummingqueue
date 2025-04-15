@@ -17,6 +17,12 @@ export NUMEXPR_NUM_THREADS=${ncores}
 export OPENBLAS_NUM_THREADS=${ncores}
 export VECLIB_MAXIMUM_THREADS=${ncores}
 
+# disable task or thread pinning in different libraries
+export OMP_PROC_BIND=FALSE
+export OMPI_MCA_hwloc_base_binding_policy=none
+export I_MPI_PIN=0
+export MPICH_CPU_BINDING=no
+
 # load env once
 export MAMBA_ROOT_PREFIX="${envs}"
 eval "$$(${binaries}/micromamba shell hook --shell bash )"
