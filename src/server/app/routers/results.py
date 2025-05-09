@@ -33,6 +33,8 @@ async def results_store(body: ResultsStore):
     for result in body.results:
         walltime = result.duration
         doc = await auth.db.tasks.find_one({"id": result.task})
+        if doc is None:
+            continue
         ncores = doc["ncores"]
         coretime += walltime * ncores
 

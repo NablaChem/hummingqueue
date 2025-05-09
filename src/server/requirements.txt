@@ -10,3 +10,4 @@ shortuuid
 starlette-compress
 sentry-sdk[fastapi]
 gunicorn
+motor

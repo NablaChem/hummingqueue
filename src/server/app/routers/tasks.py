@@ -56,7 +56,7 @@ async def tasks_submit(body: TaskSubmit):
         )
         uuids.append(taskid)
 
-    async with auth.client.start_session() as session:
+    async with await auth.client.start_session() as session:
         async with session.start_transaction():
             if len(logentries) > 0:
                 await auth.db.logs.insert_many(logentries)

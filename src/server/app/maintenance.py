@@ -147,4 +147,4 @@ async def flow_control():
         except:
             continue
 
-        asyncio.sleep(3)
+        await asyncio.sleep(3)
