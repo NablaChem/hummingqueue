@@ -14,5 +14,5 @@ app = APIRouter()
     summary="Check whether the server is up.",
     responses={200: {"description": "Server is up."}},
 )
-def ping():
+async def ping():
     return Response(content="pong", media_type="text/plain")

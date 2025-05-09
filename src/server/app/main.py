@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 import os
 import sentry_sdk
+import asyncio
 from fastapi.responses import HTMLResponse
 import threading
 import random
 import datetime as dt
 from . import maintenance
+from contextlib import asynccontextmanager
 from .routers import security
 from starlette_compress import CompressMiddleware
 
@@ -43,8 +45,14 @@ sentry_sdk.init(
     before_send_transaction=endpoint_importance_sampling,
 )
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(maintenance.flow_control())
+    yield
+    # optional cleanup code here
 
 app = FastAPI(
+    lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
     title="Hummingqueue API",
@@ -119,7 +127,3 @@ async def rapidoc():
         </html>
     """
     )
-
-
-maintenance_thread = threading.Thread(target=maintenance.flow_control)
-maintenance_thread.start()

@@ -22,8 +22,8 @@ class TaskSubmit(BaseModel):
 
 
 @app.post("/tasks/submit", tags=["compute"])
-def tasks_submit(body: TaskSubmit):
-    auth.verify_challenge(body.challenge)
+async def tasks_submit(body: TaskSubmit):
+    await auth.verify_challenge(body.challenge)
     # todo: verify digest
 
     calls = json.loads(body.calls)
@@ -31,7 +31,7 @@ def tasks_submit(body: TaskSubmit):
     logentries = []
     taskentries = []
 
-    function = auth.db.functions.find_one({"digest": body.function})
+    function = await auth.db.functions.find_one({"digest": body.function})
     prefix = f'py-{function["major"]}.{function["minor"]}-nc-{body.ncores}-dc-'
     queues = [f"{prefix}{_}" for _ in body.datacenters]
     if queues == []:
@@ -56,14 +56,14 @@ def tasks_submit(body: TaskSubmit):
         )
         uuids.append(taskid)
 
-    with auth.client.start_session() as session:
-        with session.start_transaction():
+    async with auth.client.start_session() as session:
+        async with session.start_transaction():
             if len(logentries) > 0:
-                auth.db.logs.insert_many(logentries)
-                auth.db.tasks.insert_many(taskentries)
+                await auth.db.logs.insert_many(logentries)
+                await auth.db.tasks.insert_many(taskentries)
 
     for queue in queues:
-        auth.db.active_queues.update_one(
+        await auth.db.active_queues.update_one(
             {"queue": queue}, {"$set": {"queue": queue}}, upsert=True
         )
 
@@ -87,20 +87,20 @@ class TasksDeleteCancelResponse(BaseModel):
 
 
 @app.post("/tasks/cancel", tags=["compute"], response_model=TasksDeleteCancelResponse)
-def tasks_delete(body: TasksCancel):
-    auth.verify_challenge(body.challenge)
+async def tasks_delete(body: TasksCancel):
+    await auth.verify_challenge(body.challenge)
 
-    return {"count": cancel_and_delete(body, delete=False)}
+    return {"count": await cancel_and_delete(body, delete=False)}
 
 
 @app.post("/tasks/delete", tags=["compute"], response_model=TasksDeleteCancelResponse)
-def tasks_delete(body: TasksDelete):
-    auth.verify_challenge(body.challenge)
+async def tasks_delete(body: TasksDelete):
+    await auth.verify_challenge(body.challenge)
 
-    return {"count": cancel_and_delete(body, delete=True)}
+    return {"count": await cancel_and_delete(body, delete=True)}
 
 
-def cancel_and_delete(body, delete):
+async def cancel_and_delete(body, delete):
     if body.tag:
         if delete:
             criterion = {"tag": body.tag}
@@ -122,12 +122,12 @@ def cancel_and_delete(body, delete):
             detail="Either tag or tasks must be provided.",
         )
 
-    num_affected = auth.db.tasks.count_documents(criterion)
+    num_affected = await auth.db.tasks.count_documents(criterion)
     if delete:
-        auth.db.tasks.delete_many(criterion)
+        await auth.db.tasks.delete_many(criterion)
     else:
-        auth.db.tasks.update_many(criterion, {"$set": {"status": "deleted"}})
-        auth.db.tasks.update_many(
+        await auth.db.tasks.update_many(criterion, {"$set": {"status": "deleted"}})
+        await auth.db.tasks.update_many(
             criterion, {"$unset": {"error": "", "result": "", "call": ""}}
         )
 
@@ -150,12 +150,12 @@ class TasksSync(BaseModel):
 
 
 @app.post("/tasks/sync", tags=["compute"])
-def task_sync(body: TasksSync):
-    auth.verify_challenge(body.challenge)
+async def task_sync(body: TasksSync):
+    await auth.verify_challenge(body.challenge)
 
     lost = []
     stale = set(body.known)
-    for task in auth.db.tasks.find(
+    async for task in auth.db.tasks.find(
         {"on_datacenter": body.datacenter, "status": "queued"}
     ):
         if task["id"] not in body.known:
@@ -164,7 +164,7 @@ def task_sync(body: TasksSync):
             stale.remove(task["id"])
 
     # for all in lost: set status to pending and remove on_datacenter
-    auth.db.tasks.update_many(
+    await auth.db.tasks.update_many(
         {"id": {"$in": lost}},
         {"$set": {"status": "pending"}, "$unset": {"on_datacenter": 1}},
     )
@@ -173,26 +173,14 @@ def task_sync(body: TasksSync):
 
 
 @app.post("/tasks/inspect", tags=["compute"])
-def task_inspect(body: TasksInspect):
-    auth.verify_challenge(body.challenge)
+async def task_inspect(body: TasksInspect):
+    await auth.verify_challenge(body.challenge)
 
     result = {_: None for _ in body.tasks}
-    for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
+    async for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
         result[task["id"]] = task["status"]
 
     return result
-
-
-@app.post("/tasks/inspect", tags=["compute"])
-def task_inspect(body: TasksInspect):
-    auth.verify_challenge(body.challenge)
-
-    result = {_: None for _ in body.tasks}
-    for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
-        result[task["id"]] = task["status"]
-
-    return result
-
 
 class TasksFind(BaseModel):
     challenge: str = Field(..., description="Encrypted challenge from /auth/challenge")
@@ -200,7 +188,7 @@ class TasksFind(BaseModel):
 
 
 @app.post("/tasks/find", tags=["compute"], response_model=list[str])
-def tasks_find(body: TasksFind):
+async def tasks_find(body: TasksFind):
     """
     Retrieves a list of task IDs based on the given tag.
 
@@ -208,11 +196,11 @@ def tasks_find(body: TasksFind):
     - **tag**: The tag to filter tasks.
     - Returns: A list of task IDs.
     """
-    auth.verify_challenge(body.challenge)
+    await auth.verify_challenge(body.challenge)
 
     result = [
         task["id"]
-        for task in auth.db.tasks.find({"tag": body.tag}, {"id": 1, "_id": 0})
+        async for task in auth.db.tasks.find({"tag": body.tag}, {"id": 1, "_id": 0})
     ]
 
     return result

@@ -1,5 +1,6 @@
 import os
 import pymongo
+import motor.motor_asyncio
 from nacl.signing import VerifyKey
 import base64
 import base64
@@ -66,8 +67,14 @@ except pymongo.errors.OperationFailure:
     pass
 
 
-def verify_challenge(signed_challenge):
-    for user in db.users.find():
+
+# async DB for operations
+client = motor.motor_asyncio.AsyncIOMotorClient(mongo_connstr)
+db = client[mongo_db]
+
+
+async def verify_challenge(signed_challenge):
+    async for user in db.users.find():
         verify_key = VerifyKey(base64.b64decode(user["sign"]))
         try:
             signed = verify_key.verify(

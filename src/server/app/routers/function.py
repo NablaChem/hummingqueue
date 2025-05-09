@@ -31,11 +31,11 @@ class FunctionRegister(BaseModel):
     "/function/register",
     tags=["compute"],
 )
-def task_register(body: FunctionRegister):
-    auth.verify_challenge(body.challenge)
+async def task_register(body: FunctionRegister):
+    await auth.verify_challenge(body.challenge)
 
     # verify signature
-    owner = auth.db.users.find_one({"sign": body.signing_key})
+    owner = await auth.db.users.find_one({"sign": body.signing_key})
     if not owner:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Unknown signing key"
@@ -50,8 +50,8 @@ def task_register(body: FunctionRegister):
         )
 
     # store function
-    if not auth.db.functions.find_one({"digest": body.digest}):
-        auth.db.functions.insert_one(
+    if not await auth.db.functions.find_one({"digest": body.digest}):
+        await auth.db.functions.insert_one(
             {
                 "digest": body.digest,
                 "function": body.function,
@@ -62,7 +62,7 @@ def task_register(body: FunctionRegister):
                 "packages": dict(zip(body.packages_hashes, body.packages)),
             }
         )
-        auth.db.logs.insert_one(
+        await auth.db.logs.insert_one(
             {"event": "function/register", "id": body.digest, "ts": time.time()}
         )
     return {"status": "ok"}
@@ -72,10 +72,10 @@ def task_register(body: FunctionRegister):
     "/function/fetch/{digest}",
     tags=["compute"],
 )
-def function_fetch(digest: str):
-    code = auth.db.functions.find_one({"digest": digest})
+async def function_fetch(digest: str):
+    code = await auth.db.functions.find_one({"digest": digest})
     if code:
-        authorization = auth.db.users.find_one({"sign": code["signing_key"]})
+        authorization = await auth.db.users.find_one({"sign": code["signing_key"]})
         return {
             "function": code["function"],
             "packages": code["packages"],

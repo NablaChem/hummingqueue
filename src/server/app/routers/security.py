@@ -41,7 +41,7 @@ class UserAdd(BaseModel):
 
 
 @app.post("/user/add", tags=["security"])
-def user_add(body: UserAdd):
+async def user_add(body: UserAdd):
     # verify admin signature
     try:
         auth.admin_signature.verify(
@@ -52,7 +52,7 @@ def user_add(body: UserAdd):
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid admin signature"
         )
 
-    auth.db.users.insert_one(
+    await auth.db.users.insert_one(
         {
             "sign": body.sign,
             "encrypt": body.encrypt,
@@ -69,8 +69,8 @@ class UserSecrets(BaseModel):
 
 
 @app.post("/user/secrets", tags=["security"])
-def user_secrets(body: UserSecrets):
-    entry = auth.db.users.find_one({"sign": body.sign})
+async def user_secrets(body: UserSecrets):
+    entry = await auth.db.users.find_one({"sign": body.sign})
     if entry is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Invalid user signing key"

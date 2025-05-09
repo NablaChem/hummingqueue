@@ -24,15 +24,16 @@ class ResultsStore(BaseModel):
 
 
 @app.post("/results/store", tags=["compute"])
-def results_store(body: ResultsStore):
-    auth.verify_challenge(body.challenge)
+async def results_store(body: ResultsStore):
+    await auth.verify_challenge(body.challenge)
 
     now = time.time()
     njobs = len(body.results)
     coretime = 0
     for result in body.results:
         walltime = result.duration
-        ncores = auth.db.tasks.find_one({"id": result.task})["ncores"]
+        doc = await auth.db.tasks.find_one({"id": result.task})
+        ncores = doc["ncores"]
         coretime += walltime * ncores
 
         is_error = False
@@ -51,10 +52,10 @@ def results_store(body: ResultsStore):
             "duration": result.duration,
             "done": now,
         }
-        auth.db.tasks.update_one({"id": result.task}, {"$set": update})
+        await auth.db.tasks.update_one({"id": result.task}, {"$set": update})
 
-    auth.db.counters.update_one({"metric": "coretime"}, {"$inc": {"value": coretime}})
-    auth.db.counters.update_one({"metric": "njobs"}, {"$inc": {"value": njobs}})
+    await auth.db.counters.update_one({"metric": "coretime"}, {"$inc": {"value": coretime}})
+    await auth.db.counters.update_one({"metric": "njobs"}, {"$inc": {"value": njobs}})
 
 
 class ResultsRetrieve(BaseModel):
@@ -63,11 +64,11 @@ class ResultsRetrieve(BaseModel):
 
 
 @app.post("/results/retrieve", tags=["compute"])
-def results_retreive(body: ResultsRetrieve):
-    auth.verify_challenge(body.challenge)
+async def results_retreive(body: ResultsRetrieve):
+    await auth.verify_challenge(body.challenge)
 
     results = {_: None for _ in body.tasks}
-    for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
+    async for task in auth.db.tasks.find({"id": {"$in": body.tasks}}):
         entry = {"result": None, "error": None}
         has_info = False
         for key in entry.keys():

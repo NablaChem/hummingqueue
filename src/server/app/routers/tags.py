@@ -12,11 +12,11 @@ app = APIRouter()
 
 
 @app.get("/tags/inspect", tags=["statistics"])
-def inspect_tags():
+async def inspect_tags():
     unixminute_now = int(time.time() / 60)
     unixminute_first = unixminute_now - 1
     tags = {}
-    for stats in auth.db.stats_tags.find({"ts": {"$gte": unixminute_first}}):
+    async for stats in auth.db.stats_tags.find({"ts": {"$gte": unixminute_first}}):
         del stats["_id"]
         if stats["tag"] not in tags or tags[stats["tag"]]["ts"] < stats["ts"]:
             tags[stats["tag"]] = stats
@@ -55,7 +55,7 @@ class TagStatusResponse(BaseModel):
     response_model=TagStatusResponse,
     summary="Inspect tag statistics",
 )
-def inspect_tag(request: InspectTagRequest):
+async def inspect_tag(request: InspectTagRequest):
     """
     Fetch task statistics for a given tag.
 
@@ -71,7 +71,7 @@ def inspect_tag(request: InspectTagRequest):
     fields = ["error", "completed", "pending", "queued", "deleted"]
     status: Dict[str, int] = {field: 0 for field in fields}
 
-    for record in auth.db.tasks.aggregate(pipeline):
+    async for record in auth.db.tasks.aggregate(pipeline):
         status[record["_id"]] = record["count"]
 
     status["failed"] = status.pop("error")
@@ -94,11 +94,11 @@ class TasksDequeue(BaseModel):
 
 
 @app.post("/tasks/dequeue", tags=["compute"])
-def tasks_dequeue(body: TasksDequeue):
-    auth.verify_challenge(body.challenge)
+async def tasks_dequeue(body: TasksDequeue):
+    await auth.verify_challenge(body.challenge)
 
     # update heartbeat
-    auth.db.heartbeat.update_one(
+    await auth.db.heartbeat.update_one(
         {"datacenter": body.datacenter},
         {
             "$set": {
@@ -119,7 +119,7 @@ def tasks_dequeue(body: TasksDequeue):
     tasks = {}
     remaining = body.maxtasks
     logentries = []
-    active_queues = [_["queue"] for _ in auth.db.active_queues.find()]
+    active_queues = [_["queue"] async for _ in auth.db.active_queues.find()]
     random.shuffle(active_queues)
     runid = time.time()
     limit_mb = 30
@@ -135,11 +135,11 @@ def tasks_dequeue(body: TasksDequeue):
             candidates = auth.db.tasks.find(
                 {"status": "pending", "queues": queue}, {"_id": 1}, limit=remaining
             )
-            candidate_ids = [_["_id"] for _ in candidates]
+            candidate_ids = [_["_id"] async for _ in candidates]
             if len(candidate_ids) == 0:
                 break
 
-            auth.db.tasks.update_many(
+            await auth.db.tasks.update_many(
                 {
                     "status": "pending",
                     "queues": queue,
@@ -156,7 +156,7 @@ def tasks_dequeue(body: TasksDequeue):
             )
             inflight = auth.db.tasks.find({"status": "queued", "inflight": runid})
             inflights = 0
-            for task in inflight:
+            async for task in inflight:
                 if queue not in tasks:
                     tasks[queue] = []
                 tasks[queue].append(
@@ -181,9 +181,9 @@ def tasks_dequeue(body: TasksDequeue):
     # remove empty queues
     for queue in active_queues:
         if queue not in tasks:
-            auth.db.active_queues.delete_one({"queue": queue})
+            await auth.db.active_queues.delete_one({"queue": queue})
 
     if len(logentries) > 0:
-        auth.db.logs.insert_many(logentries)
+        await auth.db.logs.insert_many(logentries)
 
     return tasks

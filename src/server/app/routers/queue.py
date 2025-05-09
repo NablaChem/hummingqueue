@@ -15,8 +15,8 @@ class QueueRequirements(BaseModel):
 
 
 @app.post("/queue/requirements", tags=["compute"])
-def queue_requirements(body: QueueRequirements):
-    auth.verify_challenge(body.challenge)
+async def queue_requirements(body: QueueRequirements):
+    await auth.verify_challenge(body.challenge)
 
     major, minor = body.version.split(".")
     major = int(major)
@@ -30,23 +30,25 @@ def queue_requirements(body: QueueRequirements):
         {"$group": {"_id": "$packages.k", "name": {"$first": "$packages.v"}}},
     ]
 
-    return [_["name"] for _ in auth.db.functions.aggregate(pipeline)]
+    return [_["name"] async for _ in auth.db.functions.aggregate(pipeline)]
 
 
 @app.get("/queue/inspect", tags=["statistics"])
-def inspect_usage():
+async def inspect_usage():
     ret = {}
     unixminute_now = int(time.time() / 60)
     unixminute_first = unixminute_now - 60
-    for stats in auth.db.stats.find({"ts": {"$gte": unixminute_first}}):
+    async for stats in auth.db.stats.find({"ts": {"$gte": unixminute_first}}):
         refts = stats["ts"]
         stats = {k: v for k, v in stats.items() if k != "_id" and k != "ts"}
         ret[unixminute_now - refts] = stats
     if 0 not in ret:
         ret[0] = {}
 
-    ret[0]["total_coretime"] = auth.db.counters.find_one({"metric": "coretime"})[
+    doc = await auth.db.counters.find_one({"metric": "coretime"})
+    ret[0]["total_coretime"] = doc[
         "value"
     ]
-    ret[0]["total_jobs"] = auth.db.counters.find_one({"metric": "njobs"})["value"]
+    doc = await auth.db.counters.find_one({"metric": "njobs"})
+    ret[0]["total_jobs"] = doc["value"]
     return ret

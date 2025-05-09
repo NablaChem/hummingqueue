@@ -1,8 +1,9 @@
 import time
 from . import auth
+import asyncio
 
 
-def check_active_queues(last_run):
+async def check_active_queues(last_run):
     """Ensures all relevant queues are in the active_queues collection."""
     # run frequency
     if time.time() - last_run < 20:
@@ -14,14 +15,14 @@ def check_active_queues(last_run):
         {"$unwind": "$queues"},
         {"$group": {"_id": "$queues"}},
     ]
-    for queue in auth.db.tasks.aggregate(pipeline):
-        auth.db.active_queues.update_one(
+    async for queue in auth.db.tasks.aggregate(pipeline):
+        await auth.db.active_queues.update_one(
             {"queue": queue["_id"]}, {"$set": {"queue": queue["_id"]}}, upsert=True
         )
     return time.time()
 
 
-def update_stats(last_update: float):
+async def update_stats(last_update: float):
     now = time.time()
     unixminute_now = int(now / 60)
     unixminute_last = int(last_update / 60)
@@ -29,20 +30,20 @@ def update_stats(last_update: float):
     if unixminute_now == unixminute_last:
         return last_update
 
-    njobs = auth.db.tasks.count_documents({"status": {"$in": ["pending", "queued"]}})
+    njobs = await auth.db.tasks.count_documents({"status": {"$in": ["pending", "queued"]}})
 
     tasks_running = 0
     cores_used = 0
     cores_allocated = 0
     cores_available = 0
-    for dc in auth.db.heartbeat.find():
+    async for dc in auth.db.heartbeat.find():
         if now - dc["ts"] < 100:
             tasks_running += dc["running"]
             cores_used += dc["used"]
             cores_allocated += dc["allocated"]
             cores_available += dc["available"]
 
-    auth.db.stats.insert_one(
+    await auth.db.stats.insert_one(
         {
             "cores_allocated": cores_allocated,
             "cores_available": cores_available,
@@ -68,8 +69,8 @@ def update_stats(last_update: float):
             {"$group": {"_id": {"tag": "$tag"}, "tag": {"$first": "$tag"}}},
         ]
     )
-    activetags_pending = [tag["_id"]["tag"] for tag in activetags_pending]
-    activetags_recent = [tag["_id"]["tag"] for tag in activetags_recent]
+    activetags_pending = [tag["_id"]["tag"] async for tag in activetags_pending]
+    activetags_recent = [tag["_id"]["tag"] async for tag in activetags_recent]
     activetags = list(set(activetags_pending + activetags_recent))
 
     # build stats for all such tags
@@ -92,7 +93,7 @@ def update_stats(last_update: float):
     )
 
     tags = {}
-    for line in tagdetails:
+    async for line in tagdetails:
         tag = line["tag"]
         if line["updated"] is None:
             updated = line["received"]
@@ -128,22 +129,22 @@ def update_stats(last_update: float):
             continue
         tags[tag]["computetime"] += line["ncores"] * line["totalduration"]
     if len(tags) > 0:
-        auth.db.stats_tags.insert_many([_ for _ in tags.values()])
-    auth.db.stats_tags.delete_many({"ts": {"$lt": now}})
+        await auth.db.stats_tags.insert_many([_ for _ in tags.values()])
+    await auth.db.stats_tags.delete_many({"ts": {"$lt": now}})
     return now
 
 
-def flow_control():
+async def flow_control():
     last_active_queues = 0
     last_update_stats = 0
     while True:
         try:
-            last_active_queues = check_active_queues(last_active_queues)
+            last_active_queues = await check_active_queues(last_active_queues)
         except:
             continue
         try:
-            last_update_stats = update_stats(last_update_stats)
+            last_update_stats = await update_stats(last_update_stats)
         except:
             continue
 
-        time.sleep(3)
+        asyncio.sleep(3)
