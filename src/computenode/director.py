@@ -128,6 +128,18 @@ class SlurmManager:
         subprocess.run(shlex.split("sbatch hmq.job"), cwd=tmpdir)
 
     @property
+    def allocated_units(self):
+        cmd = f"squeue -u {os.getenv('USER', '')} -t R -o '%C' -h"
+        try:
+            lines = subprocess.check_output(shlex.split(cmd)).splitlines()
+        except subprocess.CalledProcessError:
+            return 0
+        cores = 0
+        for line in lines:
+            cores += int(line.decode("ascii"))
+        return cores
+
+    @property
     def queued_jobs(self):
         # test how many jobs are already queued
         cmd = f"squeue -u {os.getenv('USER', '')} -o %T -h"
@@ -180,11 +192,29 @@ class SlurmManager:
     @property
     def best_partition(self):
         partitions = self._config["datacenter"]["partitions"].split(",")
-        idles = self._get_idle_nodes()
+        pending_counts = {}
         for partition in partitions:
-            if idles.get(partition, 0) > 0:
-                return partition
-        return random.choice(partitions)
+            pending_counts[partition] = 0
+        njobs = 0
+        cmd = f"squeue -u {os.getenv('USER', '')} -o '%T %P' -h"
+        output = subprocess.check_output(shlex.split(cmd))
+        for line in output.splitlines():
+            try:
+                job_state, job_partition = line.decode("ascii").strip().split()
+            except:
+                continue
+            if job_state == "COMPLETING":
+                continue
+            njobs += 1
+            if job_state == "PENDING":
+                pending_counts[job_partition] += 1
+        if njobs >= self._config["datacenter"]["maxjobs"]:
+            return
+        
+        for partition in partitions:
+            if pending_counts[partition] > 5:
+                continue
+            return partition
 
 
 class RedisManager:
@@ -449,7 +479,7 @@ def main():
                     packagelists=dependencies.packagelists,
                     maxtasks=nslots,
                     available=slurm.idle_compute_units,
-                    allocated=localredis.allocated_units,
+                    allocated=slurm.allocated_units,
                     running=localredis.running_tasks,
                     used=localredis.busy_units,
                 )
@@ -475,10 +505,14 @@ def main():
                 awaiting_queues = localredis.awaiting_queues
                 if (
                     len(awaiting_queues) > 0
-                    and slurm.queued_jobs <= config["datacenter"]["maxjobs"]
                 ):
+                    partition = slurm.best_partition
+                    if partition is None:
+                        continue
+                    print (awaiting_queues)
                     queuename = random.choice(awaiting_queues)
                     version, numcores = parse_queue_name(queuename)
+                    print (version, numcores, queuename)
                     if version is None:
                         continue
 
@@ -492,7 +526,7 @@ def main():
                         "redis_host": config["datacenter"]["redis_host"],
                         "redis_pass": config["datacenter"]["redis_pass"],
                         "binaries": config["datacenter"]["binaries"],
-                        "partitions": slurm.best_partition,
+                        "partitions": partition,
                     }
                     try:
                         if config["containers"]["method"] == "udocker":
