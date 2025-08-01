@@ -305,7 +305,8 @@ class RedisManager:
         self._r.hset("hmq:hmq2rq", mapping=mapping)
 
     def remove_map_entries(self, hmqids: list):
-        self._r.hdel("hmq:hmq2rq", *hmqids)
+        if hmqids:
+            self._r.hdel("hmq:hmq2rq", *hmqids)
 
     def cache_function(self, function):
         if not self._r.hexists("hmq:functions", function):
