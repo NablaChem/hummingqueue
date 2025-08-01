@@ -166,6 +166,10 @@ class DependencyManager:
 class SlurmManager:
     def __init__(self, config):
         self._config = config
+        self._username = os.getenv("USER")
+        if not self._username:
+            print("Error: USER environment variable not set")
+            sys.exit(1)
         self._idle_update_time = 0
 
     def read_template(self, filename: str):
@@ -182,7 +186,7 @@ class SlurmManager:
 
     @ttl_property(seconds=60)
     def allocated_units(self):
-        cmd = f"squeue -u {os.getenv('USER', '')} -t R -o '%C' -h"
+        cmd = f"squeue -u {self._username} -t R -o '%C' -h"
         try:
             lines = subprocess.check_output(shlex.split(cmd)).splitlines()
         except subprocess.CalledProcessError:
@@ -220,7 +224,7 @@ class SlurmManager:
         for partition in partitions:
             pending_counts[partition] = 0
         njobs = 0
-        cmd = f"squeue -u {os.getenv('USER', '')} -o '%T %P' -h"
+        cmd = f"squeue -u {self._username} -o '%T %P' -h"
         output = subprocess.check_output(shlex.split(cmd))
         for line in output.splitlines():
             try:
@@ -573,10 +577,8 @@ def main():
                     partition = slurm.best_partition
                     if partition is None:
                         continue
-                    print(awaiting_queues)
                     queuename = random.choice(awaiting_queues)
                     version, numcores = parse_queue_name(queuename)
-                    print(version, numcores, queuename)
                     if version is None:
                         continue
 
