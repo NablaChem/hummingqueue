@@ -458,7 +458,12 @@ def main():
             # maintenance: remove deleted jobs
             start_time = time.time()
             with span_context(op="remove_deleted_jobs"):
-                table = hmq.api.get_tasks_status(localredis.hmqids)
+                hmqids = localredis.hmqids
+                try:
+                    hmqids = random.sample(hmqids, 200)
+                except ValueError:
+                    continue
+                table = hmq.api.get_tasks_status(hmqids)
                 for hmqid, status in table.items():
                     if status == "deleted":
                         localredis.cancel_and_delete(hmqid)
