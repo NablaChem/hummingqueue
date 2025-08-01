@@ -192,16 +192,6 @@ class SlurmManager:
             cores += int(line.decode("ascii"))
         return cores
 
-    @property
-    def queued_jobs(self):
-        # test how many jobs are already queued
-        cmd = f"squeue -u {os.getenv('USER', '')} -o %T -h"
-        output = subprocess.check_output(shlex.split(cmd))
-        njobs = len(
-            [_ for _ in output.splitlines() if "COMPLETING" not in _.decode("ascii")]
-        )
-        return njobs
-
     @ttl_property(seconds=60)
     def idle_compute_units(self):
         cmd = f'sinfo -o "%n %m %a %C" -p {self._config["datacenter"]["partitions"]}'
@@ -222,20 +212,6 @@ class SlurmManager:
             except:
                 continue
         return sum(nodes.values())
-
-    @ttl_property(seconds=60)
-    def _get_idle_nodes(self):
-        cmd = 'sinfo --noheader -o "%P %D %T"'
-        try:
-            lines = subprocess.check_output(shlex.split(cmd)).splitlines()
-        except subprocess.CalledProcessError:
-            return 0
-        idles = {}
-        for line in lines:
-            pname, nodecount, state = line.decode("ascii").split()
-            if state == "idle":
-                idles[pname] = int(nodecount)
-        return idles
 
     @ttl_property(seconds=60)
     def best_partition(self):
@@ -402,14 +378,6 @@ class RedisManager:
         for queue in Queue.all(connection=self._r):
             running += queue.started_job_registry.count
         return running
-
-    @property
-    def allocated_units(self):
-        allocated = 0
-        for queue in Queue.all(connection=self._r):
-            _, numcores = parse_queue_name(queue.name)
-            allocated += queue.started_job_registry.count * int(numcores)
-        return allocated
 
     @property
     def busy_units(self):
