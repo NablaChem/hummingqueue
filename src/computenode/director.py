@@ -210,7 +210,7 @@ class SlurmManager:
                 pending_counts[job_partition] += 1
         if njobs >= self._config["datacenter"]["maxjobs"]:
             return
-        
+
         for partition in partitions:
             if pending_counts[partition] > 5:
                 continue
@@ -395,7 +395,7 @@ def main():
         sentry_sdk.init(
             dsn=config["sentry"]["director"],
             enable_tracing=True,
-            traces_sample_rate=0.3,
+            traces_sample_rate=0.01,
         )
     except:
         pass
@@ -430,38 +430,84 @@ def main():
         first = False
         with transaction_context(op="director", name=config["datacenter"]["name"]):
             # maintenance: clear function cache
+            start_time = time.time()
             with span_context(op="clear_function_cache"):
                 localredis.clear_idle_and_empty()
+            print(f"clear_function_cache: {time.time() - start_time:.3f}s")
 
             # maintenance: remove deleted jobs
+            start_time = time.time()
             with span_context(op="remove_deleted_jobs"):
                 table = hmq.api.get_tasks_status(localredis.hmqids)
                 for hmqid, status in table.items():
                     if status == "deleted":
                         localredis.cancel_and_delete(hmqid)
+            print(f"remove_deleted_jobs: {time.time() - start_time:.3f}s")
 
             # maintenance: restart failed jobs
+            start_time = time.time()
             with span_context(op="restart_failed_jobs"):
                 localredis.retry_failed_jobs()
+            print(f"restart_failed_jobs: {time.time() - start_time:.3f}s")
 
             # upload results
+            start_time = time.time()
             with span_context(op="upload_results"):
+                max_batch_size = 2 * 1024 * 1024  # 2MB in bytes
+                batch_payloads = []
+                batch_jobs = []
+                current_batch_size = 0
+
                 for rqid in localredis.to_upload:
                     try:
                         job = rq.job.Job.fetch(rqid, connection=localredis._r)
                     except rq.exceptions.NoSuchJobError:
                         localredis.remove_from_registry(rqid)
                         continue
+
                     payload = job.result
+                    payload_size = len(str(payload))
+
+                    # If adding this payload would exceed the size limit, process current batch first
+                    if (
+                        current_batch_size + payload_size > max_batch_size
+                        and batch_payloads
+                    ):
+                        try:
+                            hmq.api.store_results(batch_payloads)
+                            # Clean up jobs after successful batch upload
+                            for batch_job, batch_payload in zip(
+                                batch_jobs, batch_payloads
+                            ):
+                                localredis.remove_map_entry(batch_payload["task"])
+                                Result.delete_all(batch_job)
+                                batch_job.delete()
+                        except:
+                            pass
+                        batch_payloads = []
+                        batch_jobs = []
+                        current_batch_size = 0
+
+                    # Add current payload to batch
+                    batch_payloads.append(payload)
+                    batch_jobs.append(job)
+                    current_batch_size += payload_size
+
+                # Process remaining items in final batch
+                if batch_payloads:
                     try:
-                        hmq.api.store_results([payload])
+                        hmq.api.store_results(batch_payloads)
+                        # Clean up jobs after successful batch upload
+                        for batch_job, batch_payload in zip(batch_jobs, batch_payloads):
+                            localredis.remove_map_entry(batch_payload["task"])
+                            Result.delete_all(batch_job)
+                            batch_job.delete()
                     except:
-                        continue
-                    localredis.remove_map_entry(payload["task"])
-                    Result.delete_all(job)
-                    job.delete()
+                        pass
+            print(f"upload_results: {time.time() - start_time:.3f}s")
 
             # sync open work
+            start_time = time.time()
             with span_context(op="sync_tasks"):
                 localredis.clean_hmq2rq()
                 stale = hmq.api.sync_tasks(
@@ -469,8 +515,10 @@ def main():
                 )
                 for hmqid in stale:
                     localredis.cancel_and_delete(hmqid)
+            print(f"sync_tasks: {time.time() - start_time:.3f}s")
 
             # add more work to the queues
+            start_time = time.time()
             with span_context(op="add_more_work"):
                 nslots = max(0, 3000 - localredis.total_jobs)
 
@@ -499,20 +547,20 @@ def main():
                             localredis.add_map_entry(task["hmqid"], rq_job.id)
 
                     dependencies.meet_all(list(set(pyvers)))
+            print(f"add_more_work: {time.time() - start_time:.3f}s")
 
             # submit one job for random populated queues with work to do
+            start_time = time.time()
             with span_context(op="submit_jobs"):
                 awaiting_queues = localredis.awaiting_queues
-                if (
-                    len(awaiting_queues) > 0
-                ):
+                if len(awaiting_queues) > 0:
                     partition = slurm.best_partition
                     if partition is None:
                         continue
-                    print (awaiting_queues)
+                    print(awaiting_queues)
                     queuename = random.choice(awaiting_queues)
                     version, numcores = parse_queue_name(queuename)
-                    print (version, numcores, queuename)
+                    print(version, numcores, queuename)
                     if version is None:
                         continue
 
@@ -537,6 +585,7 @@ def main():
                     except:
                         pass
                     slurm.submit_job(variables)
+            print(f"submit_jobs: {time.time() - start_time:.3f}s")
 
 
 if __name__ == "__main__":
