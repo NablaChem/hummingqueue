@@ -14,6 +14,59 @@ from rq.results import Result
 import re
 import random
 
+import time
+from functools import wraps
+
+
+def ttl_property(seconds):
+    """
+    A decorator that creates a cached property with time-to-live (TTL) functionality.
+
+    This decorator transforms a method into a property that caches its return value
+    for a specified number of seconds. After the TTL expires, the next access will
+    re-execute the original method and cache the new result.
+
+    Args:
+        seconds (int): The cache TTL in seconds. After this time, the cached value expires.
+
+    Returns:
+        function: A decorator that can be applied to instance methods.
+
+    Usage:
+        @ttl_property(seconds=60)
+        def expensive_operation(self):
+            # This will only run once per minute
+            return costly_computation()
+
+    Implementation details:
+        - Uses instance attributes to store cached values and timestamps
+        - Cache key format: "_cache_{method_name}"
+        - Time key format: "_cache_time_{method_name}"
+        - Thread-safe for single-threaded applications
+    """
+
+    def decorator(fn):
+        cache_key = f"_cache_{fn.__name__}"
+        time_key = f"_cache_time_{fn.__name__}"
+
+        @property
+        @wraps(fn)
+        def wrapper(self):
+            now = time.time()
+            last_time = getattr(self, time_key, 0)
+            if now - last_time < seconds and hasattr(self, cache_key):
+                return getattr(self, cache_key)
+
+            value = fn(self)
+            setattr(self, cache_key, value)
+            setattr(self, time_key, now)
+            return value
+
+        return wrapper
+
+    return decorator
+
+
 try:
     import sentry_sdk
 
@@ -127,7 +180,7 @@ class SlurmManager:
 
         subprocess.run(shlex.split("sbatch hmq.job"), cwd=tmpdir)
 
-    @property
+    @ttl_property(seconds=60)
     def allocated_units(self):
         cmd = f"squeue -u {os.getenv('USER', '')} -t R -o '%C' -h"
         try:
@@ -149,33 +202,28 @@ class SlurmManager:
         )
         return njobs
 
-    @property
+    @ttl_property(seconds=60)
     def idle_compute_units(self):
-        if time.time() - self._idle_update_time > 60:
-            cmd = (
-                f'sinfo -o "%n %m %a %C" -p {self._config["datacenter"]["partitions"]}'
-            )
+        cmd = f'sinfo -o "%n %m %a %C" -p {self._config["datacenter"]["partitions"]}'
+        try:
+            lines = subprocess.check_output(shlex.split(cmd)).splitlines()
+        except subprocess.CalledProcessError:
+            # SLURM failure, e.g. from downtime/network issues.
+            return 0
+        nodes = {}
+        for nodeinfo in lines[1:]:
             try:
-                lines = subprocess.check_output(shlex.split(cmd)).splitlines()
-            except subprocess.CalledProcessError:
-                # SLURM failure, e.g. from downtime/network issues.
-                return 0
-            nodes = {}
-            for nodeinfo in lines[1:]:
-                try:
-                    name, mem, avl, cores = nodeinfo.decode("ascii").split()
-                    if avl != "up":
-                        continue
-                    memunits = int(int(mem) / 4000)
-                    cores = int(cores.split("/")[1])
-                    nodes[name] = min(memunits, cores)
-                except:
+                name, mem, avl, cores = nodeinfo.decode("ascii").split()
+                if avl != "up":
                     continue
-            self._idle_compute_units = sum(nodes.values())
-            self._idle_update_time = time.time()
+                memunits = int(int(mem) / 4000)
+                cores = int(cores.split("/")[1])
+                nodes[name] = min(memunits, cores)
+            except:
+                continue
+        return sum(nodes.values())
 
-        return self._idle_compute_units
-
+    @ttl_property(seconds=60)
     def _get_idle_nodes(self):
         cmd = 'sinfo --noheader -o "%P %D %T"'
         try:
@@ -189,7 +237,7 @@ class SlurmManager:
                 idles[pname] = int(nodecount)
         return idles
 
-    @property
+    @ttl_property(seconds=60)
     def best_partition(self):
         partitions = self._config["datacenter"]["partitions"].split(",")
         pending_counts = {}
