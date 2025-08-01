@@ -3,6 +3,7 @@ import subprocess
 import shlex
 import glob
 import time
+import rq.exceptions
 import toml
 import sys
 import redis
@@ -14,6 +15,7 @@ from rq.worker import WorkerStatus
 from rq.results import Result
 import re
 import random
+import datetime as dt
 
 import time
 from functools import wraps
@@ -353,14 +355,47 @@ class RedisManager:
         if len(all_queues) == 0:
             self._r.delete("hmq:functions")
 
+    @ttl_cache(seconds=600)
     def retry_failed_jobs(self):
+        # find all started jobs that the queues do not know about, then fail them
+        cursor = 0
+        matches = []
+        prefix = rq.job.Job.redis_job_namespace_prefix
+        while True:
+            cursor, keys = self._r.scan(cursor=cursor, match=f"{prefix}*", count=1000)
+            matches.extend(keys)
+            if cursor == 0:
+                break
+        stale = set([_[len(prefix) :].decode("ascii") for _ in matches])
+
         for queue in Queue.all(connection=self._r):
+            # reduce stale list by those which are known
+            stale = stale - set(queue.get_job_ids())
+
+            for registry in (
+                queue.failed_job_registry,
+                queue.started_job_registry,
+                queue.canceled_job_registry,
+                queue.deferred_job_registry,
+                queue.scheduled_job_registry,
+                queue.finished_job_registry,
+            ):
+                stale = stale - set(registry.get_job_ids())
+
+            # jobs which completed but failed
             for jobid in queue.failed_job_registry.get_job_ids():
                 try:
                     job = rq.job.Job.fetch(jobid, connection=self._r)
                     job.requeue()
                 except rq.exceptions.NoSuchJobError:
                     queue.failed_job_registry.remove(jobid)
+
+        # remove stales from hmq known list
+        values = [_.decode("ascii") for _ in self._r.hgetall("hmq:hmq2rq").values()]
+        self.remove_map_entries(list(set(values) & set(stale)))
+
+        for jobid in stale:
+            self._r.delete(f"{prefix}{jobid}")
 
     @property
     def hmqids(self) -> list[str]:
