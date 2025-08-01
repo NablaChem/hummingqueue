@@ -10,12 +10,35 @@ import os
 from string import Template
 import rq
 from rq import Queue, Worker
+from rq.worker import WorkerStatus
 from rq.results import Result
 import re
 import random
 
 import time
 from functools import wraps
+import time
+from functools import wraps
+
+
+def ttl_cache(seconds):
+    def decorator(fn):
+        cache = {}
+
+        @wraps(fn)
+        def wrapper(self, *args):
+            now = time.time()
+            if args in cache:
+                result, timestamp = cache[args]
+                if now - timestamp < seconds:
+                    return result
+            result = fn(self, *args)
+            cache[args] = (result, now)
+            return result
+
+        return wrapper
+
+    return decorator
 
 
 def ttl_property(seconds):
@@ -264,7 +287,8 @@ class RedisManager:
     @property
     def total_jobs(self):
         all_queues = Queue.all(connection=self._r)
-        return sum([q.count for q in all_queues])
+        result = sum([q.count for q in all_queues])
+        return result
 
     @property
     def awaiting_queues(self):
@@ -275,11 +299,11 @@ class RedisManager:
                 awaiting.append(q.name)
         return awaiting
 
-    def add_map_entry(self, hmqid, rqid):
-        self._r.hset("hmq:hmq2rq", hmqid, rqid)
+    def add_map_entries(self, mapping):
+        self._r.hset("hmq:hmq2rq", mapping=mapping)
 
-    def remove_map_entry(self, hmqid):
-        self._r.hdel("hmq:hmq2rq", hmqid)
+    def remove_map_entries(self, hmqids: list):
+        self._r.hdel("hmq:hmq2rq", *hmqids)
 
     def cache_function(self, function):
         if not self._r.hexists("hmq:functions", function):
@@ -331,24 +355,27 @@ class RedisManager:
 
     def retry_failed_jobs(self):
         for queue in Queue.all(connection=self._r):
-            for job in queue.failed_job_registry.get_job_ids():
+            for jobid in queue.failed_job_registry.get_job_ids():
                 try:
-                    job = rq.job.Job.fetch(job, connection=self._r)
+                    job = rq.job.Job.fetch(jobid, connection=self._r)
                     job.requeue()
-                except:
-                    pass
+                except rq.exceptions.NoSuchJobError:
+                    queue.failed_job_registry.remove(jobid)
 
     @property
     def hmqids(self) -> list[str]:
-        return [_.decode("ascii") for _ in self._r.hkeys("hmq:hmq2rq")]
+        result = [_.decode("ascii") for _ in self._r.hkeys("hmq:hmq2rq")]
+        return result
 
+    @ttl_cache(seconds=60)
     def clean_hmq2rq(self):
         """Remove entries from the mapping where the rq job no longer exists."""
+        to_be_deleted = []
         for hmqid, rqid in self._r.hgetall("hmq:hmq2rq").items():
-            try:
-                rq.job.Job.fetch(rqid.decode("ascii"), connection=self._r)
-            except rq.exceptions.NoSuchJobError:
-                self.cancel_and_delete(hmqid)
+            if not rq.job.Job.exists(rqid.decode("ascii"), connection=self._r):
+                to_be_deleted.append(hmqid)
+        if to_be_deleted:
+            self._r.hdel("hmq:hmq2rq", *to_be_deleted)
 
     def cancel_and_delete(self, hmqid: str):
         try:
@@ -383,19 +410,13 @@ class RedisManager:
             running += queue.started_job_registry.count
         return running
 
-    @property
+    @ttl_property(seconds=60)
     def busy_units(self):
         busy = 0
         for worker in Worker.all(connection=self._r):
-            try:
-                job = worker.get_current_job()
-            except rq.exceptions.NoSuchJobError:
-                continue
-            if job is None:
-                continue
-
-            _, numcores = parse_queue_name(job.origin)
-            busy += int(numcores)
+            if worker.get_state() == WorkerStatus.BUSY:
+                _, numcores = parse_queue_name(worker.queue_names()[0])
+                busy += int(numcores)
         return busy
 
 
@@ -450,13 +471,10 @@ def main():
         first = False
         with transaction_context(op="director", name=config["datacenter"]["name"]):
             # maintenance: clear function cache
-            start_time = time.time()
             with span_context(op="clear_function_cache"):
                 localredis.clear_idle_and_empty()
-            print(f"clear_function_cache: {time.time() - start_time:.3f}s")
 
             # maintenance: remove deleted jobs
-            start_time = time.time()
             with span_context(op="remove_deleted_jobs"):
                 hmqids = localredis.hmqids
                 try:
@@ -467,16 +485,12 @@ def main():
                 for hmqid, status in table.items():
                     if status == "deleted":
                         localredis.cancel_and_delete(hmqid)
-            print(f"remove_deleted_jobs: {time.time() - start_time:.3f}s")
 
             # maintenance: restart failed jobs
-            start_time = time.time()
             with span_context(op="restart_failed_jobs"):
                 localredis.retry_failed_jobs()
-            print(f"restart_failed_jobs: {time.time() - start_time:.3f}s")
 
             # upload results
-            start_time = time.time()
             with span_context(op="upload_results"):
                 max_batch_size = 2 * 1024 * 1024  # 2MB in bytes
                 batch_payloads = []
@@ -493,22 +507,28 @@ def main():
                     payload = job.result
                     payload_size = len(str(payload))
 
+                    def _process_batch(batch_payloads):
+                        try:
+                            hmq.api.store_results(batch_payloads)
+
+                            to_be_deleted = []
+                            # Clean up jobs after successful batch upload
+                            for batch_job, batch_payload in zip(
+                                batch_jobs, batch_payloads
+                            ):
+                                to_be_deleted.append(batch_payload["task"])
+                                Result.delete_all(batch_job)
+                                batch_job.delete()
+                            localredis.remove_map_entries(to_be_deleted)
+                        except:
+                            pass
+
                     # If adding this payload would exceed the size limit, process current batch first
                     if (
                         current_batch_size + payload_size > max_batch_size
                         and batch_payloads
                     ):
-                        try:
-                            hmq.api.store_results(batch_payloads)
-                            # Clean up jobs after successful batch upload
-                            for batch_job, batch_payload in zip(
-                                batch_jobs, batch_payloads
-                            ):
-                                localredis.remove_map_entry(batch_payload["task"])
-                                Result.delete_all(batch_job)
-                                batch_job.delete()
-                        except:
-                            pass
+                        _process_batch(batch_payloads)
                         batch_payloads = []
                         batch_jobs = []
                         current_batch_size = 0
@@ -520,19 +540,9 @@ def main():
 
                 # Process remaining items in final batch
                 if batch_payloads:
-                    try:
-                        hmq.api.store_results(batch_payloads)
-                        # Clean up jobs after successful batch upload
-                        for batch_job, batch_payload in zip(batch_jobs, batch_payloads):
-                            localredis.remove_map_entry(batch_payload["task"])
-                            Result.delete_all(batch_job)
-                            batch_job.delete()
-                    except:
-                        pass
-            print(f"upload_results: {time.time() - start_time:.3f}s")
+                    _process_batch(batch_payloads)
 
             # sync open work
-            start_time = time.time()
             with span_context(op="sync_tasks"):
                 localredis.clean_hmq2rq()
                 stale = hmq.api.sync_tasks(
@@ -540,10 +550,8 @@ def main():
                 )
                 for hmqid in stale:
                     localredis.cancel_and_delete(hmqid)
-            print(f"sync_tasks: {time.time() - start_time:.3f}s")
 
             # add more work to the queues
-            start_time = time.time()
             with span_context(op="add_more_work"):
                 nslots = max(0, 3000 - localredis.total_jobs)
 
@@ -556,26 +564,34 @@ def main():
                     running=localredis.running_tasks,
                     used=localredis.busy_units,
                 )
+                added_functions = []
+                queues = {}
                 if nslots > 0:
                     pyvers = []
                     for queuename, tasks in qtasks.items():
-                        queue = rq.Queue(queuename, connection=localredis._r)
+                        if queuename not in queues:
+                            queues[queuename] = rq.Queue(
+                                queuename, connection=localredis._r
+                            )
                         version, numcores = parse_queue_name(queuename)
                         if version is None:
                             continue
                         pyvers.append(version)
 
+                        mappings = {}
                         for task in tasks:
                             task["result_ttl"] = -1
-                            localredis.cache_function(task["function"])
-                            rq_job = queue.enqueue("hmq.unwrap", **task)
-                            localredis.add_map_entry(task["hmqid"], rq_job.id)
+                            if task["function"] not in added_functions:
+                                localredis.cache_function(task["function"])
+                                added_functions.append(task["function"])
+
+                            rq_job = queues[queuename].enqueue("hmq.unwrap", **task)
+                            mappings[task["hmqid"]] = rq_job.id
+                        localredis.add_map_entries(mappings)
 
                     dependencies.meet_all(list(set(pyvers)))
-            print(f"add_more_work: {time.time() - start_time:.3f}s")
 
             # submit one job for random populated queues with work to do
-            start_time = time.time()
             with span_context(op="submit_jobs"):
                 awaiting_queues = localredis.awaiting_queues
                 if len(awaiting_queues) > 0:
@@ -608,7 +624,6 @@ def main():
                     except:
                         pass
                     slurm.submit_job(variables)
-            print(f"submit_jobs: {time.time() - start_time:.3f}s")
 
 
 if __name__ == "__main__":
