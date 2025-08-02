@@ -516,7 +516,7 @@ def main():
                 try:
                     hmqids = random.sample(hmqids, 200)
                 except ValueError:
-                    continue
+                    pass
                 table = hmq.api.get_tasks_status(hmqids)
                 for hmqid, status in table.items():
                     if status == "deleted":
