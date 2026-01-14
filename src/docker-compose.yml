@@ -41,10 +41,10 @@ services:
       # Authentication
       - "traefik.http.middlewares.auth.basicauth.users=admin:${TRAEFIK_ADMIN_PASS}"
   mongo:
-    image: "mongo:5.0"
+    image: "mongo:8.0"
     restart: "unless-stopped"
     ports:
-     - "27017:27017"
+     - "127.0.0.1:27017:27017"
     environment:
      - "MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USER}"
      - "MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASS}"
