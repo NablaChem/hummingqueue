@@ -68,7 +68,7 @@ class API:
         self._challenge_time = 0
         self._session = None
 
-    def setup(self, url: str):
+    def setup(self, url: str) -> str:
         """Connect to queueing API.
 
         Args:
@@ -78,7 +78,7 @@ class API:
             ValueError: Only one instance is supported.
 
         Returns:
-            str: The signing request.
+            The signing request.
         """
         config = configparser.ConfigParser()
         config.read(Path("~/.hummingqueue").expanduser() / "config.ini")
@@ -161,11 +161,11 @@ class API:
         except:
             raise ValueError("Cannot submit signature. Is the admin key correct?")
 
-    def ping(self):
+    def ping(self) -> bool:
         """Test connection to server.
 
         Returns:
-            bool: Whether the server is reachable.
+            Whether the server is reachable.
         """
         self._build_box()
         try:
@@ -181,7 +181,7 @@ class API:
             instance (str): URL of the instance.
 
         Returns:
-            str: The cleaned-up URL.
+            The cleaned-up URL.
         """
         self._verify = True
         if instance.endswith("hmq.localhost.nablachem.org"):
@@ -502,7 +502,7 @@ class API:
             tag (str): The tag to inspect.
 
         Returns:
-            Optional[Dict[str, int]]: Task status counts if successful, None otherwise.
+            Task status counts if successful, None otherwise.
         """
         payload = {
             "tag": tag,
@@ -510,7 +510,7 @@ class API:
         }
         return self._post("/tag/inspect", payload)
 
-    def cancel_tasks(self, tasks: list[str] = None, tag: str = None):
+    def cancel_tasks(self, tasks: list[str] = None, tag: str = None) -> list[str]:
         """Canceles tasks in the queue.
 
         Identification of tasks may be done either by complete list of task ids or tag names.
@@ -520,12 +520,12 @@ class API:
             tag (str, optional): Tag ids. Defaults to None.
 
         Returns:
-            _type_: List of task ids canceled.
+            List of task ids canceled.
         """
         endpoint = "cancel"
         return self._cancel_or_delete_tasks(tasks, tag, endpoint)
 
-    def delete_tasks(self, tasks: list[str] = None, tag: str = None):
+    def delete_tasks(self, tasks: list[str] = None, tag: str = None) -> list[str]:
         """Deletes tasks from the queue.
 
         Identification of tasks may be done either by complete list of task ids or tag names.
@@ -535,7 +535,7 @@ class API:
             tag (str, optional): Tag ids. Defaults to None.
 
         Returns:
-            _type_: List of task ids deleted.
+            List of task ids deleted.
         """
         endpoint = "delete"
         return self._cancel_or_delete_tasks(tasks, tag, endpoint)
@@ -699,7 +699,7 @@ class API:
         """Uses the server-provided challenge for up to ten seconds.
 
         Returns:
-            str: The challenge string.
+            The challenge string.
         """
         if time.time() - self._challenge_time > 10:
             self._build_box()
@@ -762,7 +762,7 @@ class Tag:
         """Creates an in-memory database for the tag with the current schema.
 
         Returns:
-            sqlite3.Connection: The database connection.
+            The database connection.
         """
         db = sqlite3.connect(":memory:")
         db.execute(
@@ -817,12 +817,15 @@ class Tag:
             tag (str): The tag name.
 
         Returns:
-            Tag: The populated object.
+            The populated object.
         """
         t = Tag("")
         t.name = tag
         total = api.get_tag_status(tag)["total"]
-        print(f"Queue knows {total} tasks. Download them with .fetch_tasks().")
+        print(
+            f"Queue knows {total} tasks. Download them with .fetch_tasks().",
+            file=sys.stderr,
+        )
         return t
 
     def fetch_tasks(self) -> int:
@@ -831,7 +834,7 @@ class Tag:
         Existing tasks in this tag remain available.
 
         Returns:
-            int: Number of tasks added.
+            Number of tasks added.
         """
         initial_task_count = len(self)
         self._add_tasks(api.find_tasks(self.name))
@@ -845,7 +848,7 @@ class Tag:
             filename (str): Source file.
 
         Returns:
-            Tag: The loaded tag.
+            The loaded tag.
 
         Raises:
             ValueError: If the file does not exist.
@@ -929,7 +932,7 @@ class Tag:
         """Finds all tasks without results or errors.
 
         Returns:
-             list[str]: Task IDs.
+            Task IDs.
         """
         open_tasks = self._db.execute(
             "SELECT task FROM tasks WHERE result IS NULL AND error IS NULL"
@@ -941,7 +944,7 @@ class Tag:
         """Number of all tasks without results or errors.
 
         Returns:
-            int: Task count.
+            Task count.
         """
         return self._db.execute(
             "SELECT COUNT(*) FROM tasks WHERE result IS NULL AND error IS NULL"
@@ -967,7 +970,7 @@ class Tag:
             pbar (tqdm.tqdm): Progress bar to update.
 
         Returns:
-            bool: Whether the operation was aborted via Ctrl+C.
+            Whether the operation was aborted via Ctrl+C.
         """
         futures = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
@@ -1017,7 +1020,7 @@ class Tag:
             workers (int, optional): Number of parallel workers. Defaults to 4.
 
         Returns:
-            int: Number of remaining tasks for which neither result nor error is available.
+            Number of remaining tasks for which neither result nor error is available.
         """
         total_tasks = len(self) or self.fetch_tasks()
 
@@ -1093,8 +1096,8 @@ class Tag:
         but it does not match the order of submission.
 
         Returns:
-            Generator[str, None, None]: Yields results, or None if the task
-            has not been completed or an error occurred.
+            Yields results, or None if the task has not been completed or an
+            error occurred.
         """
         yield from self._yield_column("result")
 
@@ -1105,7 +1108,7 @@ class Tag:
             column (str): Column name.
 
         Returns:
-            Generator[str, None, None]: Yields values.
+            Yields values.
         """
         cursor = self._db.execute(f"SELECT {column} FROM tasks ORDER BY task")
         try:
@@ -1122,8 +1125,8 @@ class Tag:
         but it does not match the order of submission.
 
         Returns:
-            Generator[str, None, None]: Yields errors, or None if the task
-            has not been completed or an error has not occurred.
+            Yields errors, or None if the task has not been completed or an
+            error has not occurred.
         """
         yield from self._yield_column("error")
 
@@ -1243,7 +1246,7 @@ def update_library() -> int:
     """Update the hummingqueue library.
 
     Returns:
-        int: Status code of pip.
+        Status code of pip.
     """
     # direct_url.json only present if installed from git
     from_git = "direct_url.json" in (_.name for _ in importlib.metadata.files("hmq"))
@@ -1335,6 +1338,46 @@ def _describe(tag, file):
         if i > 5:
             break
         print(result)
+
+
+@cli.command(name="resultlines")
+@click.argument("tag")
+@click.option("-n", "--limit", type=int, default=None, help="Print only the first N results.")
+def _resultlines(tag, limit):
+    """
+    Pull a tag from the queue and print all results as JSONL to stdout.
+    """
+    tag = Tag.from_queue(tag)
+    tag.fetch_tasks()
+    tag.pull()
+    printed = 0
+    for result in tag.results:
+        if result is None:
+            continue
+        if limit is not None and printed >= limit:
+            break
+        print(json.dumps(result, sort_keys=True))
+        printed += 1
+
+
+@cli.command(name="errorlines")
+@click.argument("tag")
+@click.option("-n", "--limit", type=int, default=None, help="Print only the first N errors.")
+def _errorlines(tag, limit):
+    """
+    Pull a tag from the queue and print all errors as JSONL to stdout.
+    """
+    tag = Tag.from_queue(tag)
+    tag.fetch_tasks()
+    tag.pull()
+    printed = 0
+    for error in tag.errors:
+        if error is None:
+            continue
+        if limit is not None and printed >= limit:
+            break
+        print(json.dumps(error, sort_keys=True))
+        printed += 1
 
 
 if __name__ == "__main__":
